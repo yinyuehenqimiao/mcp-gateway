@@ -1,0 +1,61 @@
+:root {
+  --mg-bg: #f3f5f8;
+  --mg-panel: #ffffff;
+  --mg-ink: #1f2937;
+  --mg-muted: #6b7280;
+  --mg-accent: #0f766e;
+  --mg-accent-soft: #ccfbf1;
+  --mg-border: #e5e7eb;
+  --mg-sidebar: #0b1220;
+  --mg-sidebar-text: #d1d5db;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--mg-ink);
+  background: var(--mg-bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-card {
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-border);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.page-header p {
+  margin: 4px 0 0;
+  color: var(--mg-muted);
+  font-size: 13px;
+}
+
+.mono {
+  font-family: Consolas, "Courier New", monospace;
+}

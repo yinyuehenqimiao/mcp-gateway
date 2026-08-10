@@ -1,0 +1,25 @@
+# Build / deps
+**/target/
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# IDE / OS
+**/.idea/
+**/*.iml
+**/.vscode/
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Logs / crash dumps
+*.log
+**/hs_err_pid*.log
+
+# Local env
+**/.env
+**/.env.*
+!**/.env.example
+
+**/init.sql.tmp
+

@@ -1,0 +1,46 @@
+server:
+  port: 18090
+
+spring:
+  application:
+    name: mcp-gateway
+  datasource:
+    # characterEncoding 必须是 Java 字符集名 UTF-8（不能写 utf8mb4，否则连不上库并触发 Dialect 报错）
+    url: jdbc:mysql://127.0.0.1:3307/mcp_gateway?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: mcp
+    password: mcp_pass_123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 10
+      initialization-fail-timeout: 1
+  jpa:
+    database-platform: org.hibernate.dialect.MySQLDialect
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+        jdbc:
+          time_zone: Asia/Shanghai
+  ai:
+    mcp:
+      server:
+        name: mcp-gateway
+        version: 1.0.0
+        type: SYNC
+        protocol: sse
+        sse-endpoint: /sse
+        sse-message-endpoint: /mcp/message
+
+gateway:
+  # 兼容旧入口 /sse 时加载的默认 MCP slug；多 Agent 请使用 /mcp/{slug}/sse
+  default-server-slug: default
+  # tools/call 超时（毫秒）
+  http-timeout-ms: 15000
+
+logging:
+  level:
+    com.mcp.gateway: INFO
