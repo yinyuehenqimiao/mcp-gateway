@@ -1,5 +1,6 @@
 package com.mcp.gateway.controller;
 
+import com.mcp.gateway.config.GatewayProperties;
 import com.mcp.gateway.service.tool.DynamicToolRegistry;
 import com.mcp.gateway.service.tool.ToolMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,9 +18,13 @@ import java.util.Map;
 public class GatewayDebugController {
 
     private final DynamicToolRegistry dynamicToolRegistry;
+    private final GatewayProperties gatewayProperties;
 
-    public GatewayDebugController(DynamicToolRegistry dynamicToolRegistry) {
+    public GatewayDebugController(
+            DynamicToolRegistry dynamicToolRegistry,
+            GatewayProperties gatewayProperties) {
         this.dynamicToolRegistry = dynamicToolRegistry;
+        this.gatewayProperties = gatewayProperties;
     }
 
     @GetMapping("/health")
@@ -40,6 +45,7 @@ public class GatewayDebugController {
      */
     @GetMapping("/tools")
     public Object tools(@RequestParam(required = false) String slug) {
+        String base = trimSlash(gatewayProperties.getPublicBaseUrl());
         if (slug != null && !slug.isBlank()) {
             return dynamicToolRegistry.listBySlug(slug).stream()
                     .map(m -> toView(slug, m))
@@ -50,8 +56,8 @@ public class GatewayDebugController {
         dynamicToolRegistry.listAllBySlug().forEach((serverSlug, mappings) -> {
             Map<String, Object> group = new LinkedHashMap<>();
             group.put("slug", serverSlug);
-            group.put("sseUrl", "http://localhost:18090/mcp/" + serverSlug + "/sse");
-            group.put("messageEndpoint", "http://localhost:18090/mcp/" + serverSlug + "/message");
+            group.put("sseUrl", base + "/mcp/" + serverSlug + "/sse");
+            group.put("messageEndpoint", base + "/mcp/" + serverSlug + "/message");
             group.put("toolCount", mappings.size());
             group.put("tools", mappings.stream().map(m -> toView(serverSlug, m)).toList());
             groups.add(group);
@@ -69,5 +75,12 @@ public class GatewayDebugController {
         view.put("baseUrl", mapping.getBaseUrl());
         view.put("inputSchema", mapping.getInputSchemaJson());
         return view;
+    }
+
+    private static String trimSlash(String url) {
+        if (url == null || url.isBlank()) {
+            return "http://localhost:18190";
+        }
+        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 }

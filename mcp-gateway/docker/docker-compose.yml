@@ -25,20 +25,8 @@ services:
       timeout: 5s
       retries: 20
 
-  redis:
-    image: redis:7.2
-    container_name: mcp-gateway-redis
-    restart: unless-stopped
-    mem_limit: 128m
-    memswap_limit: 128m
-    ports:
-      - "6379:6379"
-    command:
-      - redis-server
-      - --maxmemory
-      - 64mb
-      - --maxmemory-policy
-      - allkeys-lru
+  # Redis 不单独起：复用宿主机已有 shortlink-redis（6379）
+  # docker start shortlink-redis
 
 volumes:
   mcp_gateway_mysql_data:

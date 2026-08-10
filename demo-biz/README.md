@@ -34,7 +34,7 @@ Authorization: Bearer <accessToken>
 
 可以把 **同一个 JWT** 当作 MCP 的 API Key：
 
-1. Cursor / Client 连接 `http://localhost:18090/mcp/demo-biz/sse` 时带 `Authorization: Bearer <jwt>`
+1. Cursor / Client 连接 `http://localhost:18190/mcp/demo-biz/sse` 时带 `Authorization: Bearer <jwt>`
 2. `tools/list` / `tools/call` 无 Key 会被拒绝
 3. 网关转发下游时会把该 Bearer 透传给 demo-biz
 

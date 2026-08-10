@@ -6,7 +6,7 @@
 Cursor / Codex / 自研 Agent
         │  MCP SSE: /mcp/{slug}/sse
         ▼
-   mcp-gateway (:18090)
+   mcp-gateway (:18190)
         │  管理 API 落库 MySQL，运行时按 slug 动态注册 Tool
         ▼
    下游业务 HTTP API
@@ -17,11 +17,11 @@ Cursor / Codex / 自研 Agent
 | 组件 | 说明 |
 |------|------|
 | MySQL 容器 | `mcp-gateway-mysql`，镜像 `mysql:8.0.36`，内存上限 **512MB**，端口 **3307** |
-| Redis 容器 | `mcp-gateway-redis`，镜像 `redis:7.2`，内存上限 **128MB**，端口 **6379** |
+| Redis 容器 | `shortlink-redis`，镜像 `redis:7.2`，内存上限 **128MB**，端口 **6379** |
 | 数据库 | `mcp_gateway` / 用户 `mcp` / 密码 `mcp_pass_123` |
-| 网关端口 | `18090` |
-| 分组 MCP SSE | `http://localhost:18090/mcp/{slug}/sse` |
-| 兼容入口 | `http://localhost:18090/sse`（仅加载 `gateway.default-server-slug`） |
+| 网关端口 | `18190` |
+| 分组 MCP SSE | `http://localhost:18190/mcp/{slug}/sse` |
+| 兼容入口 | `http://localhost:18190/sse`（仅加载 `gateway.default-server-slug`） |
 
 ## 鉴权 / 限流 / 审计
 
@@ -62,7 +62,7 @@ mvn spring-boot:run
 健康检查：
 
 ```bash
-curl http://localhost:18090/gateway/health
+curl http://localhost:18190/gateway/health
 ```
 
 ### 3. 管理前端（Vue3）
@@ -73,7 +73,7 @@ npm install
 npm run dev
 ```
 
-打开：http://localhost:5173
+打开：http://localhost:5273
 
 ## 核心流程
 
@@ -159,7 +159,7 @@ POST /api/mcp-servers/{id}/publish?published=true
 {
   "mcpServers": {
     "demo-biz": {
-      "url": "http://localhost:18090/mcp/demo-biz/sse"
+      "url": "http://localhost:18190/mcp/demo-biz/sse"
     }
   }
 }
@@ -167,7 +167,7 @@ POST /api/mcp-servers/{id}/publish?published=true
 
 ## 接入自研 / 多 Agent
 
-1. 连接 `http://localhost:18090/mcp/{slug}/sse`
+1. 连接 `http://localhost:18190/mcp/{slug}/sse`
 2. `initialize` → `notifications/initialized`
 3. `tools/list` 获取该分组工具
 4. `tools/call` 调用；网关转发到下游 HTTP

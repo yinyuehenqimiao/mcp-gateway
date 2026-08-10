@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "demo-biz": {
-      "url": "http://localhost:18090/mcp/demo-biz/sse"
+      "url": "http://localhost:18190/mcp/demo-biz/sse"
     }
   }
 }

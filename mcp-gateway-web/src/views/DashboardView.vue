@@ -49,7 +49,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="兼容说明：旧地址 http://localhost:18090/sse 仅加载 slug=default 的工具；多 Agent 请用 /mcp/{slug}/sse"
+      title="兼容说明：旧地址 http://localhost:18190/sse 仅加载 slug=default 的工具；多 Agent 请用 /mcp/{slug}/sse"
     />
   </div>
 </template>

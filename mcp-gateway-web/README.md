@@ -4,7 +4,7 @@ Vue 3 + Element Plus 管理端，用于管理业务系统、导入 OpenAPI、发
 
 ## 启动
 
-先确保后端 `mcp-gateway` 已启动（`http://localhost:18090`），以及 MySQL 容器在跑：
+先确保后端 `mcp-gateway` 已启动（`http://localhost:18190`），以及 MySQL 容器在跑：
 
 ```bash
 docker start mcp-gateway-mysql
@@ -20,9 +20,9 @@ npm install
 npm run dev
 ```
 
-浏览器打开：http://localhost:5173
+浏览器打开：http://localhost:5273
 
-开发环境通过 Vite 代理转发 `/api`、`/gateway` 到后端 `18090`。
+开发环境通过 Vite 代理转发 `/api`、`/gateway` 到后端 `18190`。
 
 ## 页面
 

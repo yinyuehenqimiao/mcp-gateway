@@ -1,5 +1,5 @@
 server:
-  port: 18090
+  port: 18190
 
 spring:
   application:
@@ -16,6 +16,7 @@ spring:
       initialization-fail-timeout: 1
   data:
     redis:
+      # 复用已有 shortlink-redis（宿主机 6379）
       host: 127.0.0.1
       port: 6379
       timeout: 2s
@@ -43,6 +44,7 @@ spring:
 gateway:
   # 兼容旧入口 /sse 时加载的默认 MCP slug；多 Agent 请使用 /mcp/{slug}/sse
   default-server-slug: default
+  public-base-url: http://localhost:18190
   # tools/call 超时（毫秒）
   http-timeout-ms: 15000
   jwt:

@@ -2,6 +2,7 @@ package com.mcp.gateway.service;
 
 import com.mcp.gateway.common.exception.BusinessException;
 
+import com.mcp.gateway.config.GatewayProperties;
 import com.mcp.gateway.domain.entity.ApiEndpoint;
 import com.mcp.gateway.domain.entity.McpServerApi;
 import com.mcp.gateway.domain.entity.McpServerEntity;
@@ -25,18 +26,21 @@ public class McpServerAdminService {
     private final ApiEndpointRepository apiEndpointRepository;
     private final DynamicToolRegistry dynamicToolRegistry;
     private final InputSchemaBuilder inputSchemaBuilder;
+    private final GatewayProperties gatewayProperties;
 
     public McpServerAdminService(
             McpServerRepository mcpServerRepository,
             McpServerApiRepository mcpServerApiRepository,
             ApiEndpointRepository apiEndpointRepository,
             DynamicToolRegistry dynamicToolRegistry,
-            InputSchemaBuilder inputSchemaBuilder) {
+            InputSchemaBuilder inputSchemaBuilder,
+            GatewayProperties gatewayProperties) {
         this.mcpServerRepository = mcpServerRepository;
         this.mcpServerApiRepository = mcpServerApiRepository;
         this.apiEndpointRepository = apiEndpointRepository;
         this.dynamicToolRegistry = dynamicToolRegistry;
         this.inputSchemaBuilder = inputSchemaBuilder;
+        this.gatewayProperties = gatewayProperties;
     }
 
     @Transactional
@@ -154,8 +158,9 @@ public class McpServerAdminService {
         List<Long> apiIds = mcpServerApiRepository.findByServerId(server.getId()).stream()
                 .map(McpServerApi::getApiId)
                 .toList();
-        String sseUrl = "http://localhost:18090/mcp/" + server.getSlug() + "/sse";
-        String messageEndpoint = "http://localhost:18090/mcp/" + server.getSlug() + "/message";
+        String base = trimSlash(gatewayProperties.getPublicBaseUrl());
+        String sseUrl = base + "/mcp/" + server.getSlug() + "/sse";
+        String messageEndpoint = base + "/mcp/" + server.getSlug() + "/message";
         return new McpServerDtos.McpServerResponse(
                 server.getId(),
                 server.getName(),
@@ -167,5 +172,12 @@ public class McpServerAdminService {
                 sseUrl,
                 messageEndpoint
         );
+    }
+
+    private static String trimSlash(String url) {
+        if (url == null || url.isBlank()) {
+            return "http://localhost:18190";
+        }
+        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 }

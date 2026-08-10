@@ -6,6 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GatewayProperties {
 
     private String defaultServerSlug = "default";
+    /** 对外展示的网关根地址（SSE / message 链接） */
+    private String publicBaseUrl = "http://localhost:18190";
     private long httpTimeoutMs = 15000L;
     private final Jwt jwt = new Jwt();
     private final RateLimit rateLimit = new RateLimit();
@@ -16,6 +18,14 @@ public class GatewayProperties {
 
     public void setDefaultServerSlug(String defaultServerSlug) {
         this.defaultServerSlug = defaultServerSlug;
+    }
+
+    public String getPublicBaseUrl() {
+        return publicBaseUrl;
+    }
+
+    public void setPublicBaseUrl(String publicBaseUrl) {
+        this.publicBaseUrl = publicBaseUrl;
     }
 
     public long getHttpTimeoutMs() {

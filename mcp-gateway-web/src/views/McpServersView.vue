@@ -5,7 +5,7 @@
         <h2>MCP 发布</h2>
         <p>
           每个 MCP Server 有独立 SSE：
-          <span class="mono">http://localhost:18090/mcp/&#123;slug&#125;/sse</span>
+          <span class="mono">http://localhost:18190/mcp/&#123;slug&#125;/sse</span>
           ，不同 Agent 可接入不同分组。
         </p>
       </div>
@@ -194,7 +194,7 @@ async function togglePublish(row: McpServerItem) {
 }
 
 async function copySse(row: McpServerItem) {
-  const url = row.sseUrl || `http://localhost:18090/mcp/${row.slug}/sse`
+  const url = row.sseUrl || `http://localhost:18190/mcp/${row.slug}/sse`
   await navigator.clipboard.writeText(url)
   ElMessage.success('已复制 SSE 地址')
 }
