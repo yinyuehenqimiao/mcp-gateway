@@ -32,6 +32,10 @@ public class HttpToolForwarder {
     }
 
     public String forward(ToolMapping mapping, String toolInputJson) {
+        return forward(mapping, toolInputJson, null);
+    }
+
+    public String forward(ToolMapping mapping, String toolInputJson, String callerBearerToken) {
         try {
             JsonNode args = (toolInputJson == null || toolInputJson.isBlank())
                     ? objectMapper.createObjectNode()
@@ -61,7 +65,7 @@ public class HttpToolForwarder {
             }
 
             URI uri = uriBuilder.build(true).toUri();
-            HttpHeaders headers = buildHeaders(mapping, args);
+            HttpHeaders headers = buildHeaders(mapping, args, callerBearerToken);
             JsonNode bodyNode = args.get("body");
             String method = mapping.getHttpMethod();
 
@@ -88,7 +92,7 @@ public class HttpToolForwarder {
         }
     }
 
-    private HttpHeaders buildHeaders(ToolMapping mapping, JsonNode args) throws Exception {
+    private HttpHeaders buildHeaders(ToolMapping mapping, JsonNode args, String callerBearerToken) throws Exception {
         HttpHeaders headers = new HttpHeaders();
         headers.setAccept(MediaType.parseMediaTypes(MediaType.APPLICATION_JSON_VALUE + ",*/*"));
 
@@ -114,29 +118,51 @@ public class HttpToolForwarder {
             headers.set(parameter.name(), value.asText());
         }
 
-        applyAuth(mapping, headers);
+        applyAuth(mapping, headers, callerBearerToken);
         return headers;
     }
 
-    private void applyAuth(ToolMapping mapping, HttpHeaders headers) throws Exception {
+    private void applyAuth(ToolMapping mapping, HttpHeaders headers, String callerBearerToken) throws Exception {
         String authType = mapping.getAuthType();
         if (authType == null || "NONE".equalsIgnoreCase(authType)) {
+            // 即使系统未配 auth，若调用方带了 JWT 也默认透传，方便 demo-biz 联调
+            if (callerBearerToken != null && !callerBearerToken.isBlank()) {
+                headers.setBearerAuth(callerBearerToken);
+            }
             return;
         }
         if (mapping.getAuthConfig() == null || mapping.getAuthConfig().isBlank()) {
+            if (callerBearerToken != null && !callerBearerToken.isBlank()) {
+                headers.setBearerAuth(callerBearerToken);
+            }
             return;
         }
         JsonNode config = objectMapper.readTree(mapping.getAuthConfig());
+        boolean useCallerToken = config.path("useCallerToken").asBoolean(false);
+
         if ("BEARER".equalsIgnoreCase(authType)) {
-            String token = config.path("token").asText(null);
-            if (token != null && !token.isBlank()) {
-                headers.setBearerAuth(token);
+            if (useCallerToken) {
+                if (callerBearerToken == null || callerBearerToken.isBlank()) {
+                    throw new BusinessException("下游要求透传调用方 Bearer，但未提供 API Key/JWT");
+                }
+                headers.setBearerAuth(callerBearerToken);
+            } else {
+                String token = config.path("token").asText(null);
+                if (token != null && !token.isBlank()) {
+                    headers.setBearerAuth(token);
+                } else if (callerBearerToken != null && !callerBearerToken.isBlank()) {
+                    headers.setBearerAuth(callerBearerToken);
+                }
             }
         } else if ("API_KEY".equalsIgnoreCase(authType)) {
             String headerName = config.path("headerName").asText("X-API-Key");
-            String apiKey = config.path("apiKey").asText(null);
-            if (apiKey != null && !apiKey.isBlank()) {
-                headers.set(headerName, apiKey);
+            if (useCallerToken) {
+                headers.set(headerName, callerBearerToken);
+            } else {
+                String apiKey = config.path("apiKey").asText(null);
+                if (apiKey != null && !apiKey.isBlank()) {
+                    headers.set(headerName, apiKey);
+                }
             }
         } else if ("BASIC".equalsIgnoreCase(authType)) {
             String username = config.path("username").asText("");

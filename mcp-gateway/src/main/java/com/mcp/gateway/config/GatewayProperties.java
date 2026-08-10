@@ -7,6 +7,8 @@ public class GatewayProperties {
 
     private String defaultServerSlug = "default";
     private long httpTimeoutMs = 15000L;
+    private final Jwt jwt = new Jwt();
+    private final RateLimit rateLimit = new RateLimit();
 
     public String getDefaultServerSlug() {
         return defaultServerSlug;
@@ -22,5 +24,67 @@ public class GatewayProperties {
 
     public void setHttpTimeoutMs(long httpTimeoutMs) {
         this.httpTimeoutMs = httpTimeoutMs;
+    }
+
+    public Jwt getJwt() {
+        return jwt;
+    }
+
+    public RateLimit getRateLimit() {
+        return rateLimit;
+    }
+
+    public static class Jwt {
+        /** 开启后：除静态 accessToken 外，也接受与 demo-biz 同密钥签发的 JWT */
+        private boolean enabled = true;
+        private String secret = "demo-biz-jwt-secret-change-me-32bytes!!";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getSecret() {
+            return secret;
+        }
+
+        public void setSecret(String secret) {
+            this.secret = secret;
+        }
+    }
+
+    public static class RateLimit {
+        private boolean enabled = true;
+        /** 同一调用方 Key 每分钟上限 */
+        private int perKeyPerMinute = 60;
+        /** 同一 slug+tool 每分钟上限 */
+        private int perToolPerMinute = 30;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getPerKeyPerMinute() {
+            return perKeyPerMinute;
+        }
+
+        public void setPerKeyPerMinute(int perKeyPerMinute) {
+            this.perKeyPerMinute = perKeyPerMinute;
+        }
+
+        public int getPerToolPerMinute() {
+            return perToolPerMinute;
+        }
+
+        public void setPerToolPerMinute(int perToolPerMinute) {
+            this.perToolPerMinute = perToolPerMinute;
+        }
     }
 }

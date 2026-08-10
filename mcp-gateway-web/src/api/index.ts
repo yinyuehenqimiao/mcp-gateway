@@ -1,6 +1,7 @@
 import http from './http'
 import type {
   ApiItem,
+  AuditPage,
   HealthInfo,
   ImportResult,
   McpServerItem,
@@ -77,4 +78,12 @@ export const gatewayApi = {
     http.post<{ servers: string[]; groups: Array<{ slug: string; count: number; tools: string[] }> }>(
       '/api/mcp-servers/reload',
     ).then((r) => r.data),
+
+  listAudits: (params: {
+    slug?: string
+    toolName?: string
+    success?: boolean
+    page?: number
+    size?: number
+  }) => http.get<AuditPage>('/api/audits', { params }).then((r) => r.data),
 }

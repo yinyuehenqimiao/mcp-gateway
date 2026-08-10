@@ -13,7 +13,11 @@
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column prop="code" label="Code" min-width="120" />
       <el-table-column prop="baseUrl" label="Base URL" min-width="220" show-overflow-tooltip />
-      <el-table-column prop="authType" label="认证" width="110" />
+      <el-table-column label="认证" width="140">
+        <template #default="{ row }">
+          {{ authLabel(row) }}
+        </template>
+      </el-table-column>
       <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
       <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
@@ -24,33 +28,64 @@
     </el-table>
   </div>
 
-  <el-dialog v-model="visible" :title="form.id ? '编辑系统' : '新建系统'" width="560px">
-    <el-form :model="form" label-width="100px">
+  <el-dialog v-model="visible" :title="form.id ? '编辑系统' : '新建系统'" width="600px">
+    <el-form :model="form" label-width="120px">
       <el-form-item label="名称" required>
-        <el-input v-model="form.name" placeholder="如 Petstore" />
+        <el-input v-model="form.name" placeholder="如 Demo Biz" />
       </el-form-item>
       <el-form-item label="Code" required>
-        <el-input v-model="form.code" :disabled="!!form.id" placeholder="唯一标识，如 petstore" />
+        <el-input v-model="form.code" :disabled="!!form.id" placeholder="唯一标识，如 demo-biz" />
       </el-form-item>
       <el-form-item label="Base URL" required>
-        <el-input v-model="form.baseUrl" placeholder="https://api.example.com" />
+        <el-input v-model="form.baseUrl" placeholder="http://localhost:8081" />
       </el-form-item>
-      <el-form-item label="认证类型">
-        <el-select v-model="form.authType" style="width: 100%">
-          <el-option label="NONE" value="NONE" />
-          <el-option label="BEARER" value="BEARER" />
-          <el-option label="API_KEY" value="API_KEY" />
-          <el-option label="BASIC" value="BASIC" />
+
+      <el-form-item label="认证方式">
+        <el-select v-model="form.authMode" style="width: 100%" @change="onAuthModeChange">
+          <el-option label="无认证" value="NONE" />
+          <el-option label="JWT 透传（推荐）" value="JWT_PASS" />
+          <el-option label="固定 Bearer Token" value="BEARER_FIXED" />
+          <el-option label="API Key" value="API_KEY" />
+          <el-option label="Basic 账号密码" value="BASIC" />
         </el-select>
       </el-form-item>
-      <el-form-item label="认证配置">
+
+      <el-alert
+        v-if="form.authMode === 'JWT_PASS'"
+        type="success"
+        :closable="false"
+        show-icon
+        style="margin: 0 0 16px 120px; width: calc(100% - 120px)"
+        title="调用 MCP 时传入的 JWT，会原样带给下游业务接口。一般选这个即可，不用再填 Token。"
+      />
+
+      <el-form-item v-if="form.authMode === 'BEARER_FIXED'" label="Bearer Token" required>
         <el-input
-          v-model="form.authConfig"
-          type="textarea"
-          :rows="4"
-          placeholder='BEARER: {"token":"xxx"} / API_KEY: {"headerName":"X-API-Key","apiKey":"xxx"}'
+          v-model="form.bearerToken"
+          type="password"
+          show-password
+          placeholder="粘贴固定 JWT / Access Token"
         />
       </el-form-item>
+
+      <template v-if="form.authMode === 'API_KEY'">
+        <el-form-item label="Header 名">
+          <el-input v-model="form.apiKeyHeader" placeholder="默认 X-API-Key" />
+        </el-form-item>
+        <el-form-item label="API Key" required>
+          <el-input v-model="form.apiKeyValue" type="password" show-password placeholder="下游要求的 Key" />
+        </el-form-item>
+      </template>
+
+      <template v-if="form.authMode === 'BASIC'">
+        <el-form-item label="用户名" required>
+          <el-input v-model="form.basicUsername" />
+        </el-form-item>
+        <el-form-item label="密码" required>
+          <el-input v-model="form.basicPassword" type="password" show-password />
+        </el-form-item>
+      </template>
+
       <el-form-item label="说明">
         <el-input v-model="form.description" type="textarea" :rows="2" />
       </el-form-item>
@@ -68,6 +103,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { gatewayApi } from '@/api'
 import type { SystemItem } from '@/api/types'
 
+type AuthMode = 'NONE' | 'JWT_PASS' | 'BEARER_FIXED' | 'API_KEY' | 'BASIC'
+
 const loading = ref(false)
 const saving = ref(false)
 const visible = ref(false)
@@ -78,10 +115,122 @@ const form = reactive({
   name: '',
   code: '',
   baseUrl: '',
-  authType: 'NONE',
-  authConfig: '',
+  authMode: 'JWT_PASS' as AuthMode,
+  bearerToken: '',
+  apiKeyHeader: 'X-API-Key',
+  apiKeyValue: '',
+  basicUsername: '',
+  basicPassword: '',
   description: '',
 })
+
+function parseAuthMode(row: SystemItem): AuthMode {
+  const type = (row.authType || 'NONE').toUpperCase()
+  if (type === 'NONE' || !type) return 'NONE'
+  let cfg: Record<string, unknown> = {}
+  try {
+    cfg = row.authConfig ? JSON.parse(row.authConfig) : {}
+  } catch {
+    cfg = {}
+  }
+  if (type === 'BEARER') {
+    if (cfg.useCallerToken === true || (!cfg.token && cfg.useCallerToken !== false)) {
+      // 有 useCallerToken，或未配固定 token 时，按透传理解
+      if (cfg.useCallerToken === true || !cfg.token) return 'JWT_PASS'
+    }
+    return 'BEARER_FIXED'
+  }
+  if (type === 'API_KEY') return 'API_KEY'
+  if (type === 'BASIC') return 'BASIC'
+  return 'NONE'
+}
+
+function authLabel(row: SystemItem): string {
+  switch (parseAuthMode(row)) {
+    case 'NONE':
+      return '无认证'
+    case 'JWT_PASS':
+      return 'JWT 透传'
+    case 'BEARER_FIXED':
+      return '固定 Bearer'
+    case 'API_KEY':
+      return 'API Key'
+    case 'BASIC':
+      return 'Basic'
+    default:
+      return row.authType || 'NONE'
+  }
+}
+
+function buildAuthPayload(): { authType: string; authConfig?: string } {
+  switch (form.authMode) {
+    case 'NONE':
+      return { authType: 'NONE', authConfig: undefined }
+    case 'JWT_PASS':
+      return {
+        authType: 'BEARER',
+        authConfig: JSON.stringify({ useCallerToken: true }),
+      }
+    case 'BEARER_FIXED':
+      return {
+        authType: 'BEARER',
+        authConfig: JSON.stringify({ token: form.bearerToken.trim(), useCallerToken: false }),
+      }
+    case 'API_KEY':
+      return {
+        authType: 'API_KEY',
+        authConfig: JSON.stringify({
+          headerName: form.apiKeyHeader.trim() || 'X-API-Key',
+          apiKey: form.apiKeyValue.trim(),
+        }),
+      }
+    case 'BASIC':
+      return {
+        authType: 'BASIC',
+        authConfig: JSON.stringify({
+          username: form.basicUsername.trim(),
+          password: form.basicPassword,
+        }),
+      }
+  }
+}
+
+function fillAuthFields(row: SystemItem) {
+  form.authMode = parseAuthMode(row)
+  form.bearerToken = ''
+  form.apiKeyHeader = 'X-API-Key'
+  form.apiKeyValue = ''
+  form.basicUsername = ''
+  form.basicPassword = ''
+  let cfg: Record<string, unknown> = {}
+  try {
+    cfg = row.authConfig ? JSON.parse(row.authConfig) : {}
+  } catch {
+    cfg = {}
+  }
+  if (form.authMode === 'BEARER_FIXED') {
+    form.bearerToken = String(cfg.token || '')
+  } else if (form.authMode === 'API_KEY') {
+    form.apiKeyHeader = String(cfg.headerName || 'X-API-Key')
+    form.apiKeyValue = String(cfg.apiKey || '')
+  } else if (form.authMode === 'BASIC') {
+    form.basicUsername = String(cfg.username || '')
+    form.basicPassword = String(cfg.password || '')
+  }
+}
+
+function onAuthModeChange() {
+  // 切换时清空敏感字段，避免误带旧值
+  if (form.authMode !== 'BEARER_FIXED') form.bearerToken = ''
+  if (form.authMode !== 'API_KEY') {
+    form.apiKeyHeader = 'X-API-Key'
+    form.apiKeyValue = ''
+  }
+  if (form.authMode !== 'BASIC') {
+    form.basicUsername = ''
+    form.basicPassword = ''
+  }
+}
 
 async function load() {
   loading.value = true
@@ -97,8 +246,12 @@ function resetForm() {
   form.name = ''
   form.code = ''
   form.baseUrl = ''
-  form.authType = 'NONE'
-  form.authConfig = ''
+  form.authMode = 'JWT_PASS'
+  form.bearerToken = ''
+  form.apiKeyHeader = 'X-API-Key'
+  form.apiKeyValue = ''
+  form.basicUsername = ''
+  form.basicPassword = ''
   form.description = ''
 }
 
@@ -112,9 +265,8 @@ function openEdit(row: SystemItem) {
   form.name = row.name
   form.code = row.code
   form.baseUrl = row.baseUrl
-  form.authType = row.authType || 'NONE'
-  form.authConfig = row.authConfig || ''
   form.description = row.description || ''
+  fillAuthFields(row)
   visible.value = true
 }
 
@@ -123,14 +275,28 @@ async function save() {
     ElMessage.warning('请填写必填项')
     return
   }
+  if (form.authMode === 'BEARER_FIXED' && !form.bearerToken.trim()) {
+    ElMessage.warning('请填写 Bearer Token')
+    return
+  }
+  if (form.authMode === 'API_KEY' && !form.apiKeyValue.trim()) {
+    ElMessage.warning('请填写 API Key')
+    return
+  }
+  if (form.authMode === 'BASIC' && (!form.basicUsername.trim() || !form.basicPassword)) {
+    ElMessage.warning('请填写用户名和密码')
+    return
+  }
+
+  const auth = buildAuthPayload()
   saving.value = true
   try {
     if (form.id) {
       await gatewayApi.updateSystem(form.id, {
         name: form.name,
         baseUrl: form.baseUrl,
-        authType: form.authType,
-        authConfig: form.authConfig || undefined,
+        authType: auth.authType,
+        authConfig: auth.authConfig,
         description: form.description,
       })
     } else {
@@ -138,8 +304,8 @@ async function save() {
         name: form.name,
         code: form.code,
         baseUrl: form.baseUrl,
-        authType: form.authType,
-        authConfig: form.authConfig || undefined,
+        authType: auth.authType,
+        authConfig: auth.authConfig,
         description: form.description,
       })
     }

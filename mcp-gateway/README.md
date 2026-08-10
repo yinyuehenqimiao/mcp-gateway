@@ -17,14 +17,36 @@ Cursor / Codex / 自研 Agent
 | 组件 | 说明 |
 |------|------|
 | MySQL 容器 | `mcp-gateway-mysql`，镜像 `mysql:8.0.36`，内存上限 **512MB**，端口 **3307** |
+| Redis 容器 | `mcp-gateway-redis`，镜像 `redis:7.2`，内存上限 **128MB**，端口 **6379** |
 | 数据库 | `mcp_gateway` / 用户 `mcp` / 密码 `mcp_pass_123` |
 | 网关端口 | `18090` |
 | 分组 MCP SSE | `http://localhost:18090/mcp/{slug}/sse` |
 | 兼容入口 | `http://localhost:18090/sse`（仅加载 `gateway.default-server-slug`） |
 
+## 鉴权 / 限流 / 审计
+
+### API Key（可用下游 JWT）
+
+- `tools/list`、`tools/call` **必须**带 `Authorization: Bearer <token>`
+- 校验方式：
+  1. 与 MCP Server 的 `accessToken` 精确匹配；或
+  2. `gateway.jwt.enabled=true` 时，接受与 demo-biz **同密钥**签发的 JWT
+- 转发下游时默认透传该 Bearer；业务系统可配 `authType=BEARER` + `authConfig={"useCallerToken":true}`
+
+### Redis 限流
+
+- 按调用方 Key（token hash）与按 `slug+tool` 双维度
+- 配置：`gateway.rate-limit.per-key-per-minute` / `per-tool-per-minute`
+- 超额返回 `RATE_LIMITED`（HTTP 429 / JSON-RPC `-32029`）
+
+### 调用审计
+
+- 表：`tool_call_audit`（谁/工具/参数摘要/耗时/成败）
+- 查询：`GET /api/audits?slug=&toolName=&success=&page=0&size=20`
+
 ## 启动
 
-### 1. MySQL
+### 1. MySQL + Redis
 
 ```bash
 cd docker

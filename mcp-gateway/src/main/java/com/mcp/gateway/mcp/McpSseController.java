@@ -1,17 +1,20 @@
 package com.mcp.gateway.mcp;
 
 import com.mcp.gateway.common.exception.BusinessException;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mcp.gateway.domain.entity.McpServerEntity;
+import com.mcp.gateway.service.ToolCallAuditService;
+import com.mcp.gateway.service.auth.McpApiKeyAuthenticator;
+import com.mcp.gateway.service.ratelimit.RedisRateLimiter;
 import com.mcp.gateway.service.tool.DynamicToolRegistry;
 import com.mcp.gateway.service.tool.HttpToolForwarder;
 import com.mcp.gateway.service.tool.ToolMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,7 +28,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -44,16 +46,25 @@ public class McpSseController {
     private final HttpToolForwarder httpToolForwarder;
     private final McpSessionManager sessionManager;
     private final ObjectMapper objectMapper;
+    private final McpApiKeyAuthenticator apiKeyAuthenticator;
+    private final RedisRateLimiter rateLimiter;
+    private final ToolCallAuditService auditService;
 
     public McpSseController(
             DynamicToolRegistry toolRegistry,
             HttpToolForwarder httpToolForwarder,
             McpSessionManager sessionManager,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            McpApiKeyAuthenticator apiKeyAuthenticator,
+            RedisRateLimiter rateLimiter,
+            ToolCallAuditService auditService) {
         this.toolRegistry = toolRegistry;
         this.httpToolForwarder = httpToolForwarder;
         this.sessionManager = sessionManager;
         this.objectMapper = objectMapper;
+        this.apiKeyAuthenticator = apiKeyAuthenticator;
+        this.rateLimiter = rateLimiter;
+        this.auditService = auditService;
     }
 
     @GetMapping(value = "/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -61,16 +72,16 @@ public class McpSseController {
             @PathVariable String slug,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         McpServerEntity server = requirePublished(slug);
-        assertToken(server, authorization);
+        McpApiKeyAuthenticator.AuthContext auth = apiKeyAuthenticator.authenticate(server, authorization);
 
         String sessionId = UUID.randomUUID().toString();
         SseEmitter emitter = new SseEmitter(0L);
-        sessionManager.create(sessionId, slug, emitter);
+        sessionManager.create(sessionId, slug, auth.rawToken(), emitter);
 
         try {
             String endpoint = "/mcp/" + slug + "/message?sessionId=" + sessionId;
             emitter.send(SseEmitter.event().name("endpoint").data(endpoint));
-            log.info("MCP SSE connected slug={} sessionId={}", slug, sessionId);
+            log.info("MCP SSE connected slug={} sessionId={} subject={}", slug, sessionId, auth.subject());
         } catch (IOException ex) {
             sessionManager.remove(sessionId);
             emitter.completeWithError(ex);
@@ -85,25 +96,28 @@ public class McpSseController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody String body) throws Exception {
         McpServerEntity server = requirePublished(slug);
-        assertToken(server, authorization);
 
         McpSession session = sessionManager.get(sessionId)
                 .orElseThrow(() -> new BusinessException("无效 sessionId，请先连接 /mcp/" + slug + "/sse"));
         if (!slug.equals(session.slug())) {
-            throw new IllegalArgumentException("session 与 slug 不匹配");
+            throw new BusinessException("session 与 slug 不匹配");
         }
 
         JsonNode message = objectMapper.readTree(body);
         if (message.isArray()) {
             for (JsonNode item : message) {
-                handleOne(session, server, item);
+                handleOne(session, server, authorization, item);
             }
             return ResponseEntity.accepted().build();
         }
-        return handleOne(session, server, message);
+        return handleOne(session, server, authorization, message);
     }
 
-    private ResponseEntity<?> handleOne(McpSession session, McpServerEntity server, JsonNode message) throws Exception {
+    private ResponseEntity<?> handleOne(
+            McpSession session,
+            McpServerEntity server,
+            String authorization,
+            JsonNode message) throws Exception {
         String method = text(message, "method");
         JsonNode id = message.get("id");
         boolean isNotification = id == null || id.isNull();
@@ -125,22 +139,47 @@ public class McpSseController {
             switch (method) {
                 case "initialize" -> response.set("result", initializeResult(server));
                 case "ping" -> response.set("result", objectMapper.createObjectNode());
-                case "tools/list" -> response.set("result", toolsListResult(session.slug()));
-                case "tools/call" -> response.set("result", toolsCallResult(session.slug(), message.path("params")));
+                case "tools/list" -> {
+                    McpApiKeyAuthenticator.AuthContext auth = resolveToolAuth(server, session, authorization);
+                    rateLimiter.checkOrThrow(auth.keyHash(), session.slug(), null);
+                    response.set("result", toolsListResult(session.slug()));
+                }
+                case "tools/call" -> {
+                    McpApiKeyAuthenticator.AuthContext auth = resolveToolAuth(server, session, authorization);
+                    response.set("result", toolsCallResult(session, auth, message.path("params")));
+                }
                 default -> {
                     return ResponseEntity.ok(error(id, -32601, "Method not found: " + method));
                 }
             }
+        } catch (BusinessException ex) {
+            if ("UNAUTHORIZED".equals(ex.getCode())) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(id, -32001, ex.getMessage()));
+            }
+            if ("RATE_LIMITED".equals(ex.getCode())) {
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error(id, -32029, ex.getMessage()));
+            }
+            return ResponseEntity.ok(error(id, -32603, ex.getMessage()));
         } catch (Exception ex) {
             log.error("MCP handle failed slug={} method={}", session.slug(), method, ex);
             return ResponseEntity.ok(error(id, -32603, ex.getMessage()));
         }
 
         sendSseMessage(session, response);
-        // 同时在 HTTP 响应体返回，兼容部分客户端
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(response);
+    }
+
+    private McpApiKeyAuthenticator.AuthContext resolveToolAuth(
+            McpServerEntity server,
+            McpSession session,
+            String authorization) {
+        String headerToken = McpApiKeyAuthenticator.extractToken(authorization);
+        String effectiveAuth = (headerToken != null && !headerToken.isBlank())
+                ? "Bearer " + headerToken
+                : (session.apiKey() == null ? null : "Bearer " + session.apiKey());
+        return apiKeyAuthenticator.requireKeyForTools(server, effectiveAuth);
     }
 
     private ObjectNode initializeResult(McpServerEntity server) {
@@ -166,12 +205,17 @@ public class McpSseController {
         return result;
     }
 
-    private ObjectNode toolsCallResult(String slug, JsonNode params) {
+    private ObjectNode toolsCallResult(
+            McpSession session,
+            McpApiKeyAuthenticator.AuthContext auth,
+            JsonNode params) {
         String toolName = text(params, "name");
         if (toolName == null || toolName.isBlank()) {
-            throw new IllegalArgumentException("tools/call 缺少 name");
+            throw new BusinessException("tools/call 缺少 name");
         }
-        ToolMapping mapping = toolRegistry.findMapping(slug, toolName)
+        rateLimiter.checkOrThrow(auth.keyHash(), session.slug(), toolName);
+
+        ToolMapping mapping = toolRegistry.findMapping(session.slug(), toolName)
                 .orElseThrow(() -> new BusinessException("工具不存在或不属于该 MCP: " + toolName));
 
         JsonNode arguments = params.path("arguments");
@@ -181,16 +225,44 @@ public class McpSseController {
                     ? "{}"
                     : objectMapper.writeValueAsString(arguments);
         } catch (Exception ex) {
-            throw new IllegalArgumentException("arguments 解析失败", ex);
+            throw new BusinessException("arguments 解析失败: " + ex.getMessage());
         }
 
-        String output = httpToolForwarder.forward(mapping, argsJson);
+        long start = System.currentTimeMillis();
+        boolean success = false;
+        String errorMessage = null;
+        String output;
+        try {
+            output = httpToolForwarder.forward(mapping, argsJson, auth.rawToken());
+            success = output == null || !output.contains("\"error\"");
+            if (!success) {
+                errorMessage = truncate(output, 500);
+            }
+        } catch (Exception ex) {
+            output = "{\"error\":\"" + ex.getMessage() + "\"}";
+            errorMessage = ex.getMessage();
+        }
+        int duration = (int) (System.currentTimeMillis() - start);
+        try {
+            auditService.record(
+                    session.slug(),
+                    auth.keyHash(),
+                    auth.subject(),
+                    toolName,
+                    argsJson,
+                    success,
+                    errorMessage,
+                    duration);
+        } catch (Exception ex) {
+            log.warn("写入调用审计失败 tool={}: {}", toolName, ex.getMessage());
+        }
+
         ObjectNode result = objectMapper.createObjectNode();
         ArrayNode content = result.putArray("content");
         ObjectNode text = content.addObject();
         text.put("type", "text");
         text.put("text", output == null ? "" : output);
-        result.put("isError", output != null && output.contains("\"error\""));
+        result.put("isError", !success);
         return result;
     }
 
@@ -204,24 +276,6 @@ public class McpSseController {
         return toolRegistry.findPublishedServer(slug)
                 .orElseThrow(() -> new BusinessException(
                         "MCP Server 不存在或未发布: " + slug + "，请先在管理台发布"));
-    }
-
-    private void assertToken(McpServerEntity server, String authorization) {
-        String expected = server.getAccessToken();
-        if (expected == null || expected.isBlank()) {
-            return;
-        }
-        // 本地学习默认不强制鉴权；只有客户端显式带了 Authorization 时才校验
-        if (authorization == null || authorization.isBlank()) {
-            log.debug("MCP slug={} 未携带 Authorization，已放行（accessToken 已配置但未强制）", server.getSlug());
-            return;
-        }
-        String token = authorization.startsWith("Bearer ")
-                ? authorization.substring("Bearer ".length()).trim()
-                : authorization.trim();
-        if (!expected.equals(token)) {
-            throw new IllegalArgumentException("Unauthorized：accessToken 不正确");
-        }
     }
 
     private ObjectNode error(JsonNode id, int code, String message) {
@@ -244,5 +298,12 @@ public class McpSseController {
         }
         JsonNode value = node.get(field);
         return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private static String truncate(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max);
     }
 }

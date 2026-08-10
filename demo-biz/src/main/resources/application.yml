@@ -5,6 +5,14 @@ spring:
   application:
     name: demo-biz
 
+demo:
+  jwt:
+    # 与 mcp-gateway gateway.jwt.secret 保持一致，便于把同一 JWT 当 MCP API Key
+    secret: demo-biz-jwt-secret-change-me-32bytes!!
+    expire-seconds: 7200
+    demo-username: demo
+    demo-password: demo123
+
 springdoc:
   api-docs:
     path: /v3/api-docs

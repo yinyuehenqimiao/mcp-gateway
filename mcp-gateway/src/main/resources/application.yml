@@ -14,6 +14,11 @@ spring:
       connection-timeout: 10000
       maximum-pool-size: 10
       initialization-fail-timeout: 1
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 2s
   jpa:
     database-platform: org.hibernate.dialect.MySQLDialect
     hibernate:
@@ -40,6 +45,14 @@ gateway:
   default-server-slug: default
   # tools/call 超时（毫秒）
   http-timeout-ms: 15000
+  jwt:
+    # 与 demo-biz demo.jwt.secret 一致：MCP 可用下游 JWT 当 API Key
+    enabled: true
+    secret: demo-biz-jwt-secret-change-me-32bytes!!
+  rate-limit:
+    enabled: true
+    per-key-per-minute: 60
+    per-tool-per-minute: 30
 
 logging:
   level:

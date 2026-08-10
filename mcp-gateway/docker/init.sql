@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS mcp_server (
   name VARCHAR(128) NOT NULL,
   slug VARCHAR(64) NOT NULL,
   description VARCHAR(512) NULL,
-  access_token VARCHAR(128) NULL,
+  access_token VARCHAR(1024) NULL,
   published TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -52,4 +52,20 @@ CREATE TABLE IF NOT EXISTS mcp_server_api (
   KEY idx_msa_api (api_id),
   CONSTRAINT fk_msa_server FOREIGN KEY (server_id) REFERENCES mcp_server(id) ON DELETE CASCADE,
   CONSTRAINT fk_msa_api FOREIGN KEY (api_id) REFERENCES api_endpoint(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  slug VARCHAR(64) NOT NULL,
+  caller_key_hash VARCHAR(64) NULL,
+  caller_subject VARCHAR(128) NULL,
+  tool_name VARCHAR(128) NOT NULL,
+  arguments_summary VARCHAR(1024) NULL,
+  success TINYINT(1) NOT NULL,
+  error_message VARCHAR(1024) NULL,
+  duration_ms INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_audit_created (created_at),
+  KEY idx_audit_slug_tool (slug, tool_name),
+  KEY idx_audit_caller (caller_key_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

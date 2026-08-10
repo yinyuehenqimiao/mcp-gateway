@@ -83,3 +83,24 @@ export interface HealthInfo {
   publishedServers?: number
   defaultSseTools?: number
 }
+
+export interface AuditItem {
+  id: number
+  slug: string
+  callerKeyHash?: string
+  callerSubject?: string
+  toolName: string
+  argumentsSummary?: string
+  success: boolean
+  errorMessage?: string
+  durationMs: number
+  createdAt: string
+}
+
+export interface AuditPage {
+  items: AuditItem[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}

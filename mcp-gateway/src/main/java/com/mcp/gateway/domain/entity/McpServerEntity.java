@@ -29,7 +29,7 @@ public class McpServerEntity {
     @Column(length = 512)
     private String description;
 
-    @Column(name = "access_token", length = 128)
+    @Column(name = "access_token", length = 1024)
     private String accessToken;
 
     @Column(nullable = false)

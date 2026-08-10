@@ -39,6 +39,12 @@ const router = createRouter({
           component: () => import('@/views/ToolsView.vue'),
           meta: { title: '已发布工具' },
         },
+        {
+          path: 'audits',
+          name: 'audits',
+          component: () => import('@/views/AuditsView.vue'),
+          meta: { title: '调用审计' },
+        },
       ],
     },
   ],

@@ -12,8 +12,8 @@ public class McpSessionManager {
 
     private final Map<String, McpSession> sessions = new ConcurrentHashMap<>();
 
-    public McpSession create(String sessionId, String slug, SseEmitter emitter) {
-        McpSession session = new McpSession(sessionId, slug, emitter);
+    public McpSession create(String sessionId, String slug, String apiKey, SseEmitter emitter) {
+        McpSession session = new McpSession(sessionId, slug, apiKey, emitter);
         sessions.put(sessionId, session);
         emitter.onCompletion(() -> sessions.remove(sessionId));
         emitter.onTimeout(() -> sessions.remove(sessionId));

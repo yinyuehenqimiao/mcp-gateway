@@ -37,6 +37,10 @@
           <el-icon><Tools /></el-icon>
           <span>已发布工具</span>
         </el-menu-item>
+        <el-menu-item index="/audits">
+          <el-icon><Document /></el-icon>
+          <span>调用审计</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
