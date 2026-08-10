@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -67,12 +68,27 @@ public class McpSseController {
         this.auditService = auditService;
     }
 
-    @GetMapping(value = "/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter connect(
+    @GetMapping(value = "/sse")
+    public Object connect(
             @PathVariable String slug,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
-        McpServerEntity server = requirePublished(slug);
-        McpApiKeyAuthenticator.AuthContext auth = apiKeyAuthenticator.authenticate(server, authorization);
+        // 鉴权失败时必须直接返回 JSON，不能走 SseEmitter 内容协商；
+        // 否则 Client Accept: text/event-stream 时会变成空 500，掩盖真正的 401。
+        final McpServerEntity server;
+        final McpApiKeyAuthenticator.AuthContext auth;
+        try {
+            server = requirePublished(slug);
+            auth = apiKeyAuthenticator.authenticate(server, authorization);
+        } catch (BusinessException ex) {
+            HttpStatus status = "UNAUTHORIZED".equals(ex.getCode())
+                    ? HttpStatus.UNAUTHORIZED
+                    : HttpStatus.BAD_REQUEST;
+            return ResponseEntity.status(status)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of(
+                            "code", ex.getCode() == null ? "BAD_REQUEST" : ex.getCode(),
+                            "message", ex.getMessage() == null ? "error" : ex.getMessage()));
+        }
 
         String sessionId = UUID.randomUUID().toString();
         SseEmitter emitter = new SseEmitter(0L);
@@ -86,7 +102,9 @@ public class McpSseController {
             sessionManager.remove(sessionId);
             emitter.completeWithError(ex);
         }
-        return emitter;
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .body(emitter);
     }
 
     @PostMapping("/message")

@@ -5,6 +5,7 @@ import com.mcp.gateway.common.exception.BusinessException;
 import com.mcp.gateway.domain.entity.BizSystem;
 import com.mcp.gateway.domain.repository.BizSystemRepository;
 import com.mcp.gateway.dto.SystemDtos;
+import com.mcp.gateway.service.tool.DynamicToolRegistry;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,9 +15,13 @@ import java.util.List;
 public class BizSystemService {
 
     private final BizSystemRepository bizSystemRepository;
+    private final DynamicToolRegistry dynamicToolRegistry;
 
-    public BizSystemService(BizSystemRepository bizSystemRepository) {
+    public BizSystemService(
+            BizSystemRepository bizSystemRepository,
+            DynamicToolRegistry dynamicToolRegistry) {
         this.bizSystemRepository = bizSystemRepository;
+        this.dynamicToolRegistry = dynamicToolRegistry;
     }
 
     @Transactional
@@ -62,12 +67,16 @@ public class BizSystemService {
         if (request.authConfig() != null) {
             system.setAuthConfig(request.authConfig());
         }
-        return toResponse(bizSystemRepository.save(system));
+        SystemDtos.SystemResponse response = toResponse(bizSystemRepository.saveAndFlush(system));
+        // baseUrl / 鉴权变更后必须刷新已发布工具映射，否则会继续打到旧地址（如 8001→404）
+        dynamicToolRegistry.refresh();
+        return response;
     }
 
     @Transactional
     public void delete(Long id) {
         bizSystemRepository.delete(require(id));
+        dynamicToolRegistry.refresh();
     }
 
     public BizSystem require(Long id) {

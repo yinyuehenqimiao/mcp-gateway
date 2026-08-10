@@ -54,14 +54,14 @@
       type="info"
       :closable="false"
       show-icon
-      title="推荐填 demo-biz 地址：http://localhost:8081/v3/api-docs"
+      title="可填 /v3/api-docs，也可直接填 swagger-ui 地址（如 http://localhost:8001/swagger-ui/index.html），网关会自动探测 JSON 文档并展开 Schemas 字段说明"
       style="margin-bottom: 14px"
     />
     <el-tabs v-model="importTab">
       <el-tab-pane label="从 URL 导入" name="url">
         <el-input
           v-model="importForm.openapiUrl"
-          placeholder="http://localhost:8081/v3/api-docs"
+          placeholder="http://localhost:8001/v3/api-docs 或 .../swagger-ui/index.html"
           clearable
         />
       </el-tab-pane>
@@ -334,7 +334,7 @@ const editTab = ref('params')
 const importError = ref('')
 
 const importForm = reactive({
-  openapiUrl: 'http://localhost:8081/v3/api-docs',
+  openapiUrl: 'http://localhost:8001/swagger-ui/index.html',
   openapiContent: '',
   replaceExisting: true,
   fileName: '',
@@ -394,7 +394,7 @@ async function loadApis() {
 function openImport() {
   importError.value = ''
   importTab.value = 'url'
-  importForm.openapiUrl = 'http://localhost:8081/v3/api-docs'
+  importForm.openapiUrl = 'http://localhost:8001/swagger-ui/index.html'
   importForm.openapiContent = ''
   importForm.replaceExisting = true
   importForm.fileName = ''

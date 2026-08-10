@@ -26,7 +26,9 @@ public class GlobalExceptionHandler {
             case "RATE_LIMITED" -> HttpStatus.TOO_MANY_REQUESTS;
             default -> HttpStatus.BAD_REQUEST;
         };
-        return ResponseEntity.status(status).body(error(ex.getCode(), ex.getMessage()));
+        return ResponseEntity.status(status)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(error(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -8,6 +8,7 @@ import com.mcp.gateway.domain.entity.BizSystem;
 import com.mcp.gateway.domain.repository.ApiEndpointRepository;
 import com.mcp.gateway.domain.repository.McpServerApiRepository;
 import com.mcp.gateway.service.openapi.OpenApiDocumentParser;
+import com.mcp.gateway.service.openapi.OpenApiUrlResolver;
 import com.mcp.gateway.service.openapi.ParsedOperation;
 import com.mcp.gateway.service.tool.DynamicToolRegistry;
 import com.mcp.gateway.service.tool.HttpToolForwarder;
@@ -30,6 +31,7 @@ public class ApiEndpointService {
     private final McpServerApiRepository mcpServerApiRepository;
     private final BizSystemService bizSystemService;
     private final OpenApiDocumentParser openApiDocumentParser;
+    private final OpenApiUrlResolver openApiUrlResolver;
     private final InputSchemaBuilder inputSchemaBuilder;
     private final HttpToolForwarder httpToolForwarder;
     private final DynamicToolRegistry dynamicToolRegistry;
@@ -41,6 +43,7 @@ public class ApiEndpointService {
             McpServerApiRepository mcpServerApiRepository,
             BizSystemService bizSystemService,
             OpenApiDocumentParser openApiDocumentParser,
+            OpenApiUrlResolver openApiUrlResolver,
             InputSchemaBuilder inputSchemaBuilder,
             HttpToolForwarder httpToolForwarder,
             DynamicToolRegistry dynamicToolRegistry,
@@ -50,6 +53,7 @@ public class ApiEndpointService {
         this.mcpServerApiRepository = mcpServerApiRepository;
         this.bizSystemService = bizSystemService;
         this.openApiDocumentParser = openApiDocumentParser;
+        this.openApiUrlResolver = openApiUrlResolver;
         this.inputSchemaBuilder = inputSchemaBuilder;
         this.httpToolForwarder = httpToolForwarder;
         this.dynamicToolRegistry = dynamicToolRegistry;
@@ -206,22 +210,26 @@ public class ApiEndpointService {
         if (request.openapiUrl() == null || request.openapiUrl().isBlank()) {
             throw new BusinessException("请提供 openapiUrl 或 openapiContent");
         }
+        String documentUrl = openApiUrlResolver.resolveDocumentUrl(request.openapiUrl().trim());
         try {
             String body = restClientBuilder.build()
                     .get()
-                    .uri(request.openapiUrl().trim())
+                    .uri(documentUrl)
                     .retrieve()
                     .body(String.class);
             if (body == null || body.isBlank()) {
-                throw new BusinessException("OpenAPI URL 返回空内容: " + request.openapiUrl());
+                throw new BusinessException("OpenAPI URL 返回空内容: " + documentUrl
+                        + "（由 " + request.openapiUrl() + " 解析得到）");
             }
             return sanitizeDocument(body);
-        } catch (IllegalArgumentException ex) {
+        } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(
-                    "拉取 OpenAPI 失败，请确认地址可访问且网关能连到该服务: "
-                            + request.openapiUrl() + "，原因: " + ex.getMessage(),
+                    "拉取 OpenAPI 失败。可填 /v3/api-docs，也可填 swagger-ui 地址（会自动探测）。"
+                            + " 原始: " + request.openapiUrl()
+                            + "，实际拉取: " + documentUrl
+                            + "，原因: " + ex.getMessage(),
                     ex);
         }
     }
@@ -234,8 +242,13 @@ public class ApiEndpointService {
         if (content.isEmpty()) {
             throw new BusinessException("OpenAPI 内容为空");
         }
+        if (content.startsWith("<!") || content.startsWith("<html") || content.startsWith("<HTML")) {
+            throw new BusinessException(
+                    "拿到的是 HTML（多半是 swagger-ui 页面）而不是 OpenAPI JSON。"
+                            + " 请改用 /v3/api-docs，或直接填 swagger-ui 地址让网关自动探测 api-docs");
+        }
         if (!(content.startsWith("{") || content.startsWith("["))) {
-            throw new BusinessException("目前仅支持 JSON 格式的 OpenAPI/Swagger（请粘贴 /v3/api-docs 的 JSON，不支持 YAML）");
+            throw new BusinessException("目前仅支持 JSON 格式的 OpenAPI/Swagger（不支持 YAML）");
         }
         return content;
     }

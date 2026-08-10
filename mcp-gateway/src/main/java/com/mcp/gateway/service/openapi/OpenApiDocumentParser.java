@@ -16,14 +16,17 @@ import java.util.Map;
 
 /**
  * 解析 OpenAPI 3.x / Swagger 2.0 JSON，输出统一的 ParsedOperation。
+ * requestBody / 参数 schema 会递归展开 components/schemas（含字段 description）。
  */
 @Component
 public class OpenApiDocumentParser {
 
     private final ObjectMapper objectMapper;
+    private final OpenApiSchemaExpander schemaExpander;
 
-    public OpenApiDocumentParser(ObjectMapper objectMapper) {
+    public OpenApiDocumentParser(ObjectMapper objectMapper, OpenApiSchemaExpander schemaExpander) {
         this.objectMapper = objectMapper;
+        this.schemaExpander = schemaExpander;
     }
 
     public List<ParsedOperation> parse(String documentJson) {
@@ -65,18 +68,19 @@ public class OpenApiDocumentParser {
                 boolean hasBody = operation.has("requestBody") && !operation.get("requestBody").isNull();
                 String bodySchema = null;
                 if (hasBody) {
-                    JsonNode schema = resolveSchema(root, operation.path("requestBody")
-                            .path("content").path("application/json").path("schema"));
+                    JsonNode schema = operation.path("requestBody")
+                            .path("content").path("application/json").path("schema");
                     if (schema.isMissingNode() || schema.isNull()) {
                         // fallback first content type
                         JsonNode content = operation.path("requestBody").path("content");
                         if (content.isObject() && content.fields().hasNext()) {
-                            schema = resolveSchema(root, content.fields().next().getValue().path("schema"));
+                            schema = content.fields().next().getValue().path("schema");
                         }
                     }
-                    bodySchema = schema.isMissingNode() || schema.isNull()
+                    JsonNode expanded = schemaExpander.expand(root, schema);
+                    bodySchema = expanded == null || expanded.isMissingNode() || expanded.isNull()
                             ? "{\"type\":\"object\"}"
-                            : schema.toString();
+                            : expanded.toString();
                 }
 
                 result.add(toOperation(root, pathTemplate, method, operation, params, bodySchema,
@@ -122,10 +126,10 @@ public class OpenApiDocumentParser {
                 if (parameters != null && parameters.isArray()) {
                     for (JsonNode parameterNode : parameters) {
                         if ("body".equalsIgnoreCase(textOrNull(parameterNode.get("in")))) {
-                            JsonNode schema = resolveSchema(root, parameterNode.path("schema"));
-                            bodySchema = schema.isMissingNode() || schema.isNull()
+                            JsonNode expanded = schemaExpander.expand(root, parameterNode.path("schema"));
+                            bodySchema = expanded == null || expanded.isMissingNode() || expanded.isNull()
                                     ? "{\"type\":\"object\"}"
-                                    : schema.toString();
+                                    : expanded.toString();
                             bodyRequired = parameterNode.path("required").asBoolean(true);
                             params.removeIf(p -> "body".equalsIgnoreCase(p.in()));
                             break;
@@ -206,9 +210,17 @@ public class OpenApiDocumentParser {
             }
             boolean required = resolved.path("required").asBoolean("path".equalsIgnoreCase(in));
             String description = textOrNull(resolved.get("description"));
-            String type = resolved.path("schema").path("type").asText(null);
-            if (type == null) {
-                type = resolved.path("type").asText("string");
+            JsonNode schemaNode = resolved.has("schema") ? resolved.get("schema") : resolved;
+            JsonNode expandedSchema = schemaExpander.expand(root, schemaNode);
+            String type = expandedSchema.path("type").asText(null);
+            if (type == null || type.isBlank()) {
+                type = "string";
+            }
+            // 复杂 query/header 对象：把展开后的 schema 摘要写进 description，便于人工查看
+            if (("object".equals(type) || "array".equals(type)) && description != null) {
+                description = description + " | schema=" + compactSchemaHint(expandedSchema);
+            } else if (("object".equals(type) || "array".equals(type)) && description == null) {
+                description = compactSchemaHint(expandedSchema);
             }
             params.add(new ParsedOperation.Param(
                     name,
@@ -219,6 +231,29 @@ public class OpenApiDocumentParser {
             ));
         }
         return params;
+    }
+
+    private String compactSchemaHint(JsonNode schema) {
+        if (schema == null || !schema.isObject()) {
+            return "object";
+        }
+        if ("array".equals(schema.path("type").asText())) {
+            JsonNode items = schema.path("items");
+            if (items.has("properties") && items.get("properties").isObject()) {
+                return "array<" + String.join(",", iterableNames(items.get("properties"))) + ">";
+            }
+            return "array<" + items.path("type").asText("object") + ">";
+        }
+        if (schema.has("properties") && schema.get("properties").isObject()) {
+            return "object{" + String.join(",", iterableNames(schema.get("properties"))) + "}";
+        }
+        return schema.path("type").asText("object");
+    }
+
+    private static Iterable<String> iterableNames(JsonNode properties) {
+        List<String> names = new ArrayList<>();
+        properties.fieldNames().forEachRemaining(names::add);
+        return names;
     }
 
     private String buildInputSchema(List<ParsedOperation.Param> parameters, String bodySchema, boolean bodyRequired)
@@ -253,8 +288,17 @@ public class OpenApiDocumentParser {
             if (!bodyProperty.has("type")) {
                 bodyProperty.put("type", "object");
             }
+            // 把 DTO 标题/说明提升到 body 描述，方便 Agent 理解
             if (!bodyProperty.has("description")) {
-                bodyProperty.put("description", "JSON request body");
+                String title = bodyProperty.path("title").asText(null);
+                String desc = bodyProperty.path("description").asText(null);
+                if (desc != null && !desc.isBlank()) {
+                    bodyProperty.put("description", desc);
+                } else if (title != null && !title.isBlank()) {
+                    bodyProperty.put("description", title);
+                } else {
+                    bodyProperty.put("description", "JSON request body（已展开 schemas 字段）");
+                }
             }
             if (bodyRequired) {
                 required.add("body");
@@ -267,28 +311,8 @@ public class OpenApiDocumentParser {
         return schema.toString();
     }
 
-    private JsonNode resolveSchema(JsonNode root, JsonNode schemaNode) {
-        if (schemaNode == null || schemaNode.isMissingNode() || schemaNode.isNull()) {
-            return objectMapper.createObjectNode().put("type", "object");
-        }
-        String ref = textOrNull(schemaNode.get("$ref"));
-        if (ref == null || ref.isBlank()) {
-            return schemaNode;
-        }
-        return resolveRef(root, ref);
-    }
-
     private JsonNode resolveRef(JsonNode root, String ref) {
-        if (!ref.startsWith("#/")) {
-            return root;
-        }
-        JsonNode current = root;
-        for (String part : ref.substring(2).split("/")) {
-            current = current.path(part);
-        }
-        return current.isMissingNode() || current.isNull()
-                ? objectMapper.createObjectNode().put("type", "object")
-                : current;
+        return schemaExpander.expand(root, objectMapper.createObjectNode().put("$ref", ref));
     }
 
     private static boolean isHttpMethod(String method) {

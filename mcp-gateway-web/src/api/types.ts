@@ -44,7 +44,11 @@ export interface McpServerItem {
   name: string
   slug: string
   description?: string
+  /** JWT=业务登录令牌校验；FIXED=固定 Access Token */
+  authMode?: string
   accessToken?: string
+  /** JWT 模式可选：下游签发密钥 */
+  jwtSecret?: string
   published: boolean
   apiIds: number[]
   sseUrl: string

@@ -62,7 +62,9 @@ export const gatewayApi = {
     name: string
     slug: string
     description?: string
+    authMode?: string
     accessToken?: string
+    jwtSecret?: string
     apiIds: number[]
   }) => http.post<McpServerItem>('/api/mcp-servers', body).then((r) => r.data),
   updateMcpServer: (id: number, body: Record<string, unknown>) =>

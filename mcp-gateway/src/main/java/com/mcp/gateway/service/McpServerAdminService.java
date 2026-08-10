@@ -1,7 +1,6 @@
 package com.mcp.gateway.service;
 
 import com.mcp.gateway.common.exception.BusinessException;
-
 import com.mcp.gateway.config.GatewayProperties;
 import com.mcp.gateway.domain.entity.ApiEndpoint;
 import com.mcp.gateway.domain.entity.McpServerApi;
@@ -9,14 +8,15 @@ import com.mcp.gateway.domain.entity.McpServerEntity;
 import com.mcp.gateway.domain.repository.ApiEndpointRepository;
 import com.mcp.gateway.domain.repository.McpServerApiRepository;
 import com.mcp.gateway.domain.repository.McpServerRepository;
+import com.mcp.gateway.dto.McpServerDtos;
 import com.mcp.gateway.service.tool.DynamicToolRegistry;
 import com.mcp.gateway.service.tool.InputSchemaBuilder;
-import com.mcp.gateway.dto.McpServerDtos;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.UUID;
+import java.util.Locale;
 
 @Service
 public class McpServerAdminService {
@@ -50,13 +50,18 @@ public class McpServerAdminService {
         }
         validateApiIds(request.apiIds());
 
+        String authMode = normalizeAuthMode(request.authMode());
+        String accessToken = blankToNull(request.accessToken());
+        String jwtSecret = blankToNull(request.jwtSecret());
+        validateAuthConfig(authMode, accessToken);
+
         McpServerEntity server = new McpServerEntity();
         server.setName(request.name());
         server.setSlug(request.slug());
         server.setDescription(request.description());
-        server.setAccessToken(request.accessToken() == null || request.accessToken().isBlank()
-                ? UUID.randomUUID().toString().replace("-", "")
-                : request.accessToken());
+        server.setAuthMode(authMode);
+        server.setAccessToken(accessToken);
+        server.setJwtSecret(jwtSecret);
         server.setPublished(false);
         McpServerEntity saved = mcpServerRepository.save(server);
         replaceBindings(saved.getId(), request.apiIds());
@@ -82,14 +87,23 @@ public class McpServerAdminService {
         if (request.description() != null) {
             server.setDescription(request.description());
         }
-        if (request.accessToken() != null && !request.accessToken().isBlank()) {
-            server.setAccessToken(request.accessToken());
+        if (request.authMode() != null && !request.authMode().isBlank()) {
+            server.setAuthMode(normalizeAuthMode(request.authMode()));
         }
+        // accessToken / jwtSecret：传 null 表示不改；传 "" 表示清空
+        if (request.accessToken() != null) {
+            server.setAccessToken(blankToNull(request.accessToken()));
+        }
+        if (request.jwtSecret() != null) {
+            server.setJwtSecret(blankToNull(request.jwtSecret()));
+        }
+        validateAuthConfig(server.getAuthMode(), server.getAccessToken());
+
         if (request.apiIds() != null) {
             validateApiIds(request.apiIds());
             replaceBindings(server.getId(), request.apiIds());
         }
-        McpServerEntity saved = mcpServerRepository.save(server);
+        McpServerEntity saved = mcpServerRepository.saveAndFlush(server);
         if (Boolean.TRUE.equals(saved.getPublished())) {
             dynamicToolRegistry.refresh();
         }
@@ -133,12 +147,15 @@ public class McpServerAdminService {
 
     private void replaceBindings(Long serverId, List<Long> apiIds) {
         mcpServerApiRepository.deleteByServerId(serverId);
-        for (Long apiId : apiIds) {
+        mcpServerApiRepository.flush();
+        LinkedHashSet<Long> uniqueIds = new LinkedHashSet<>(apiIds);
+        for (Long apiId : uniqueIds) {
             McpServerApi bind = new McpServerApi();
             bind.setServerId(serverId);
             bind.setApiId(apiId);
             mcpServerApiRepository.save(bind);
         }
+        mcpServerApiRepository.flush();
     }
 
     private void validateApiIds(List<Long> apiIds) {
@@ -147,6 +164,29 @@ public class McpServerAdminService {
                 throw new BusinessException("API 不存在: " + apiId);
             }
         }
+    }
+
+    private void validateAuthConfig(String authMode, String accessToken) {
+        if ("FIXED".equals(normalizeAuthMode(authMode))
+                && (accessToken == null || accessToken.isBlank())) {
+            throw new BusinessException("固定令牌模式必须填写 Access Token（可粘贴业务登录 JWT）");
+        }
+    }
+
+    private static String normalizeAuthMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "JWT";
+        }
+        String m = mode.trim().toUpperCase(Locale.ROOT);
+        return "FIXED".equals(m) ? "FIXED" : "JWT";
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private McpServerEntity require(Long id) {
@@ -166,7 +206,9 @@ public class McpServerAdminService {
                 server.getName(),
                 server.getSlug(),
                 server.getDescription(),
+                server.getAuthMode() == null ? "JWT" : server.getAuthMode(),
                 server.getAccessToken(),
+                server.getJwtSecret(),
                 server.getPublished(),
                 apiIds,
                 sseUrl,

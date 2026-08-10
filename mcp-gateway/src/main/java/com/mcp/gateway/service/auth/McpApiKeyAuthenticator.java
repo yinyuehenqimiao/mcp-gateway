@@ -12,72 +12,82 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.Locale;
 
 /**
- * MCP API Key 校验：
- * 1) 静态 accessToken 精确匹配；
- * 2) 或 gateway.jwt 开启时，接受与 demo-biz 同密钥签发的 JWT。
+ * MCP 接入鉴权：
+ * - JWT 模式：校验业务登录 JWT（密钥可用 MCP 上配置的 jwtSecret，否则用网关默认）
+ * - FIXED 模式：Authorization Bearer 必须等于 accessToken
+ * 通过后，同一 token 可被业务系统「JWT 透传」转发给下游。
  */
 @Component
 public class McpApiKeyAuthenticator {
 
     private final GatewayProperties gatewayProperties;
-    private final SecretKey jwtKey;
 
     public McpApiKeyAuthenticator(GatewayProperties gatewayProperties) {
         this.gatewayProperties = gatewayProperties;
-        this.jwtKey = Keys.hmacShaKeyFor(
-                gatewayProperties.getJwt().getSecret().getBytes(StandardCharsets.UTF_8));
     }
 
     public AuthContext authenticate(McpServerEntity server, String authorization) {
-        String expected = server.getAccessToken();
-        boolean requireKey = expected != null && !expected.isBlank();
-        String rawToken = extractToken(authorization);
-
-        if (!requireKey) {
-            // 未配置 accessToken：开放；仍可记录调用方
-            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken), false);
-        }
-
-        if (rawToken == null || rawToken.isBlank()) {
-            throw new BusinessException("UNAUTHORIZED", "缺少 API Key：请在 Authorization: Bearer <token> 中携带");
-        }
-
-        if (expected.equals(rawToken)) {
-            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken), true);
-        }
-
-        if (gatewayProperties.getJwt().isEnabled() && isValidJwt(rawToken)) {
-            // 配置了 accessToken，同时允许同密钥 JWT（便于把下游登录令牌直接当 MCP Key）
-            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken), true);
-        }
-
-        throw new BusinessException("UNAUTHORIZED", "API Key / JWT 无效");
+        return authenticateInternal(server, authorization, false);
     }
 
-    /**
-     * tools/list、tools/call 必须有 Key：即使未配置静态 accessToken，也要求携带可校验的 JWT（jwt.enabled 时）。
-     */
     public AuthContext requireKeyForTools(McpServerEntity server, String authorization) {
-        String expected = server.getAccessToken();
-        boolean hasStatic = expected != null && !expected.isBlank();
+        return authenticateInternal(server, authorization, true);
+    }
+
+    private AuthContext authenticateInternal(McpServerEntity server, String authorization, boolean toolsRequired) {
         String rawToken = extractToken(authorization);
+        String mode = normalizeMode(server.getAuthMode());
 
         if (rawToken == null || rawToken.isBlank()) {
-            throw new BusinessException("UNAUTHORIZED", "tools/list 与 tools/call 需要 API Key（Authorization Bearer）");
+            throw new BusinessException(
+                    "UNAUTHORIZED",
+                    "缺少凭证：请在 Authorization: Bearer <JWT或AccessToken> 中携带");
         }
 
-        if (hasStatic && expected.equals(rawToken)) {
-            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken), true);
+        if ("FIXED".equals(mode)) {
+            String expected = server.getAccessToken();
+            if (expected == null || expected.isBlank()) {
+                throw new BusinessException("UNAUTHORIZED", "该 MCP 为固定令牌模式，但未配置 Access Token");
+            }
+            if (!expected.equals(rawToken)) {
+                throw new BusinessException("UNAUTHORIZED", "Access Token 不正确");
+            }
+            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken, resolveSecret(server)), true);
         }
-        if (gatewayProperties.getJwt().isEnabled() && isValidJwt(rawToken)) {
-            return new AuthContext(rawToken, hash(rawToken), subjectFromJwt(rawToken), true);
+
+        // JWT 模式
+        if (!gatewayProperties.getJwt().isEnabled()) {
+            throw new BusinessException("UNAUTHORIZED", "网关未开启 JWT 校验（gateway.jwt.enabled=false）");
         }
-        if (hasStatic) {
-            throw new BusinessException("UNAUTHORIZED", "API Key / JWT 无效");
+        String secret = resolveSecret(server);
+        try {
+            Claims claims = parseJwt(rawToken, secret);
+            return new AuthContext(rawToken, hash(rawToken), claims.getSubject(), true);
+        } catch (Exception ex) {
+            throw new BusinessException(
+                    "UNAUTHORIZED",
+                    "JWT 无效或密钥不匹配。请确认：1) Agent 使用业务登录 JWT；2) MCP 的 JWT 密钥与下游签发密钥一致"
+                            + (toolsRequired ? "；tools/list、tools/call 必须带有效 JWT" : "")
+                            + "。原因: " + ex.getMessage());
         }
-        throw new BusinessException("UNAUTHORIZED", "JWT 无效或已过期");
+    }
+
+    private String resolveSecret(McpServerEntity server) {
+        if (server.getJwtSecret() != null && !server.getJwtSecret().isBlank()) {
+            return server.getJwtSecret().trim();
+        }
+        return gatewayProperties.getJwt().getSecret();
+    }
+
+    private static String normalizeMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "JWT";
+        }
+        String m = mode.trim().toUpperCase(Locale.ROOT);
+        return "FIXED".equals(m) ? "FIXED" : "JWT";
     }
 
     public static String extractToken(String authorization) {
@@ -90,29 +100,25 @@ public class McpApiKeyAuthenticator {
         return authorization.trim();
     }
 
-    private boolean isValidJwt(String token) {
-        try {
-            parseJwt(token);
-            return true;
-        } catch (Exception ex) {
-            return false;
+    private Claims parseJwt(String token, String secret) {
+        byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
+        // JJWT 要求 HS256 key 足够长；过短时做填充，避免启动后才炸
+        if (keyBytes.length < 32) {
+            byte[] padded = new byte[32];
+            System.arraycopy(keyBytes, 0, padded, 0, keyBytes.length);
+            keyBytes = padded;
         }
-    }
-
-    private Claims parseJwt(String token) {
+        SecretKey key = Keys.hmacShaKeyFor(keyBytes);
         return Jwts.parser()
-                .verifyWith(jwtKey)
+                .verifyWith(key)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
     }
 
-    private String subjectFromJwt(String token) {
-        if (token == null || token.isBlank() || !gatewayProperties.getJwt().isEnabled()) {
-            return null;
-        }
+    private String subjectFromJwt(String token, String secret) {
         try {
-            return parseJwt(token).getSubject();
+            return parseJwt(token, secret).getSubject();
         } catch (Exception ex) {
             return null;
         }

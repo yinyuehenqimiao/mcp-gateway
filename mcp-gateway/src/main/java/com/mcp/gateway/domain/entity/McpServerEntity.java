@@ -29,8 +29,21 @@ public class McpServerEntity {
     @Column(length = 512)
     private String description;
 
+    /**
+     * 接入模式：
+     * JWT = 校验业务登录 JWT（与下游同一令牌，可透传）；
+     * FIXED = 使用固定 accessToken 字符串。
+     */
+    @Column(name = "auth_mode", nullable = false, length = 32)
+    private String authMode = "JWT";
+
+    /** FIXED 模式下的固定凭证；JWT 模式下可为空 */
     @Column(name = "access_token", length = 1024)
     private String accessToken;
+
+    /** JWT 模式下可选：覆盖网关默认密钥（填下游签发 JWT 的 secret） */
+    @Column(name = "jwt_secret", length = 256)
+    private String jwtSecret;
 
     @Column(nullable = false)
     private Boolean published = false;
@@ -75,12 +88,28 @@ public class McpServerEntity {
         this.description = description;
     }
 
+    public String getAuthMode() {
+        return authMode;
+    }
+
+    public void setAuthMode(String authMode) {
+        this.authMode = authMode;
+    }
+
     public String getAccessToken() {
         return accessToken;
     }
 
     public void setAccessToken(String accessToken) {
         this.accessToken = accessToken;
+    }
+
+    public String getJwtSecret() {
+        return jwtSecret;
+    }
+
+    public void setJwtSecret(String jwtSecret) {
+        this.jwtSecret = jwtSecret;
     }
 
     public Boolean getPublished() {
