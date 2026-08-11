@@ -32,14 +32,20 @@
     <el-table :data="groups" empty-text="暂无已发布 MCP" stripe>
       <el-table-column prop="slug" label="Slug" width="140" />
       <el-table-column prop="toolCount" label="工具数" width="90" />
-      <el-table-column prop="sseUrl" label="SSE 地址" min-width="320">
+      <el-table-column prop="sseUrl" label="SSE 地址" min-width="260">
         <template #default="{ row }">
           <span class="mono">{{ row.sseUrl }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120">
+      <el-table-column prop="streamableUrl" label="Streamable" min-width="240">
         <template #default="{ row }">
-          <el-button link type="primary" @click="copy(row.sseUrl)">复制</el-button>
+          <span class="mono">{{ row.streamableUrl }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="200">
+        <template #default="{ row }">
+          <el-button link type="primary" @click="copy(row.sseUrl)">复制 SSE</el-button>
+          <el-button link type="primary" @click="copy(row.streamableUrl)">复制 Streamable</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -49,7 +55,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="兼容说明：旧地址 http://localhost:18190/sse 仅加载 slug=default 的工具；多 Agent 请用 /mcp/{slug}/sse"
+      title="双轨入口：SSE=/mcp/{slug}/sse；无状态 Streamable=POST /mcp/{slug}。旧地址 /sse 仅加载 slug=default"
     />
   </div>
 </template>

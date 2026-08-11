@@ -1,10 +1,11 @@
 """
-MCP 网关并发压测：SSE 建连 + tools/call。
+MCP 网关并发压测：SSE 或无状态 Streamable HTTP。
 
-示例:
-  D:\\Anaconda\\envs\\agent-study\\python.exe mcp_load_test.py ^
-    --base http://localhost:18190 --slug bench --tool ping ^
-    --token "<JWT>" --concurrency 50 --duration 60
+SSE:
+  python mcp_load_test.py --transport sse --slug bench --tool ping --token ... 
+
+Streamable（无长连接）:
+  python mcp_load_test.py --transport streamable --slug bench --tool ping --token ...
 """
 from __future__ import annotations
 
@@ -50,7 +51,23 @@ def percentile(sorted_vals: list[float], p: float) -> float:
     return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
 
 
-async def call_tool(
+def _parse_tool_response(resp: httpx.Response) -> tuple[bool, str]:
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+    data = resp.json()
+    if "error" in data:
+        return False, f"rpc error: {data['error']}"
+    result = data.get("result") or {}
+    if result.get("isError"):
+        text = ""
+        content = result.get("content") or []
+        if content and isinstance(content, list):
+            text = str(content[0].get("text", ""))[:200]
+        return False, f"tool isError: {text}"
+    return True, "ok"
+
+
+async def call_tool_sse(
     client: httpx.AsyncClient,
     base: str,
     slug: str,
@@ -82,25 +99,47 @@ async def call_tool(
             timeout=30.0,
         )
         ms = (time.perf_counter() - t0) * 1000.0
-        if resp.status_code != 200:
-            return False, ms, f"HTTP {resp.status_code}: {resp.text[:200]}"
-        data = resp.json()
-        if "error" in data:
-            return False, ms, f"rpc error: {data['error']}"
-        result = data.get("result") or {}
-        if result.get("isError"):
-            text = ""
-            content = result.get("content") or []
-            if content and isinstance(content, list):
-                text = str(content[0].get("text", ""))[:200]
-            return False, ms, f"tool isError: {text}"
-        return True, ms, "ok"
+        ok, err = _parse_tool_response(resp)
+        return ok, ms, err
     except Exception as ex:  # noqa: BLE001
+        return False, (time.perf_counter() - t0) * 1000.0, str(ex)
+
+
+async def call_tool_streamable(
+    client: httpx.AsyncClient,
+    base: str,
+    slug: str,
+    token: str,
+    tool: str,
+    arguments: dict[str, Any],
+    req_id: int,
+) -> tuple[bool, float, str]:
+    url = f"{base.rstrip('/')}/mcp/{slug}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": tool,
+    }
+    payload = {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments},
+    }
+    t0 = time.perf_counter()
+    try:
+        resp = await client.post(url, headers=headers, json=payload, timeout=30.0)
         ms = (time.perf_counter() - t0) * 1000.0
-        return False, ms, str(ex)
+        ok, err = _parse_tool_response(resp)
+        return ok, ms, err
+    except Exception as ex:  # noqa: BLE001
+        return False, (time.perf_counter() - t0) * 1000.0, str(ex)
 
 
-async def worker(
+async def worker_sse(
     name: int,
     client: httpx.AsyncClient,
     base: str,
@@ -119,89 +158,43 @@ async def worker(
             counter["n"] += 1
             req_id = counter["n"]
         sid = session_ids[req_id % len(session_ids)]
-        ok, ms, err = await call_tool(client, base, slug, sid, token, tool, arguments, req_id)
+        ok, ms, err = await call_tool_sse(client, base, slug, sid, token, tool, arguments, req_id)
         if ok:
             stats.add_ok(ms)
         else:
             stats.add_fail(ms, f"w{name}: {err}")
 
 
-async def run(args: argparse.Namespace) -> None:
-    arguments = json.loads(args.arguments) if args.arguments else {}
-    limits = httpx.Limits(max_connections=max(args.concurrency * 2, 100), max_keepalive_connections=100)
-    timeout = httpx.Timeout(30.0, connect=10.0)
-    stop = asyncio.Event()
-    sse_tasks: list[asyncio.Task] = []
-    session_ids: list[str] = []
+async def worker_streamable(
+    name: int,
+    client: httpx.AsyncClient,
+    base: str,
+    slug: str,
+    token: str,
+    tool: str,
+    arguments: dict[str, Any],
+    stop_at: float,
+    stats: Stats,
+    lock: asyncio.Lock,
+    counter: dict[str, int],
+) -> None:
+    while time.perf_counter() < stop_at:
+        async with lock:
+            counter["n"] += 1
+            req_id = counter["n"]
+        ok, ms, err = await call_tool_streamable(client, base, slug, token, tool, arguments, req_id)
+        if ok:
+            stats.add_ok(ms)
+        else:
+            stats.add_fail(ms, f"w{name}: {err}")
 
-    # trust_env=False：避免本机 HTTP_PROXY 把 localhost 也代理掉导致 ConnectError
-    async with httpx.AsyncClient(limits=limits, timeout=timeout, http2=False, trust_env=False) as client:
-        session_count = max(1, min(args.sessions, args.concurrency))
-        print(f"opening {session_count} SSE session(s)...", flush=True)
 
-        async def hold_sse(ready: asyncio.Future[str], sse_url: str, sse_headers: dict[str, str]) -> None:
-            try:
-                async with client.stream("GET", sse_url, headers=sse_headers, timeout=None) as resp:
-                    if resp.status_code != 200:
-                        body = (await resp.aread()).decode("utf-8", errors="replace")
-                        if not ready.done():
-                            ready.set_exception(RuntimeError(f"SSE HTTP {resp.status_code}: {body}"))
-                        return
-                    event_name = None
-                    async for line in resp.aiter_lines():
-                        if stop.is_set():
-                            break
-                        if line.startswith("event:"):
-                            event_name = line[6:].strip()
-                        elif line.startswith("data:") and event_name == "endpoint":
-                            data = line[5:].strip()
-                            sid = data.split("sessionId=", 1)[1].strip()
-                            if not ready.done():
-                                ready.set_result(sid)
-                        elif line == "":
-                            event_name = None
-            except Exception as ex:  # noqa: BLE001
-                if not ready.done():
-                    ready.set_exception(ex)
-
-        for _ in range(session_count):
-            url = f"{args.base.rstrip('/')}/mcp/{args.slug}/sse"
-            headers = {"Authorization": f"Bearer {args.token}", "Accept": "text/event-stream"}
-            ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-            task = asyncio.create_task(hold_sse(ready, url, headers))
-            sse_tasks.append(task)
-            sid = await asyncio.wait_for(ready, timeout=30.0)
-            session_ids.append(sid)
-            print(f"  sessionId={sid}", flush=True)
-
-        stats = Stats()
-        lock = asyncio.Lock()
-        counter = {"n": 0}
-        stop_at = time.perf_counter() + args.duration
-        print(
-            f"start load: concurrency={args.concurrency} duration={args.duration}s "
-            f"tool={args.tool} slug={args.slug}",
-            flush=True,
-        )
-        t0 = time.perf_counter()
-        workers = [
-            asyncio.create_task(
-                worker(i, client, args.base, args.slug, args.token, args.tool, arguments, session_ids, stop_at, stats, lock, counter)
-            )
-            for i in range(args.concurrency)
-        ]
-        await asyncio.gather(*workers)
-        elapsed = time.perf_counter() - t0
-
-        stop.set()
-        for t in sse_tasks:
-            t.cancel()
-        await asyncio.gather(*sse_tasks, return_exceptions=True)
-
+def print_result(elapsed: float, stats: Stats, transport: str) -> None:
     total = stats.ok + stats.fail
     lats = sorted(stats.latencies_ms)
     qps = total / elapsed if elapsed > 0 else 0.0
     print("\n========== RESULT ==========")
+    print(f"transport     : {transport}")
     print(f"elapsed_s     : {elapsed:.2f}")
     print(f"total         : {total}")
     print(f"ok / fail     : {stats.ok} / {stats.fail}")
@@ -220,12 +213,106 @@ async def run(args: argparse.Namespace) -> None:
     print("============================\n")
 
 
+async def run(args: argparse.Namespace) -> None:
+    arguments = json.loads(args.arguments) if args.arguments else {}
+    limits = httpx.Limits(max_connections=max(args.concurrency * 2, 100), max_keepalive_connections=100)
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    stop = asyncio.Event()
+    sse_tasks: list[asyncio.Task] = []
+    session_ids: list[str] = []
+    transport = args.transport.lower().strip()
+
+    async with httpx.AsyncClient(limits=limits, timeout=timeout, http2=False, trust_env=False) as client:
+        if transport == "sse":
+            session_count = max(1, min(args.sessions, args.concurrency))
+            print(f"opening {session_count} SSE session(s)...", flush=True)
+
+            async def hold_sse(ready: asyncio.Future[str], sse_url: str, sse_headers: dict[str, str]) -> None:
+                try:
+                    async with client.stream("GET", sse_url, headers=sse_headers, timeout=None) as resp:
+                        if resp.status_code != 200:
+                            body = (await resp.aread()).decode("utf-8", errors="replace")
+                            if not ready.done():
+                                ready.set_exception(RuntimeError(f"SSE HTTP {resp.status_code}: {body}"))
+                            return
+                        event_name = None
+                        async for line in resp.aiter_lines():
+                            if stop.is_set():
+                                break
+                            if line.startswith("event:"):
+                                event_name = line[6:].strip()
+                            elif line.startswith("data:") and event_name == "endpoint":
+                                data = line[5:].strip()
+                                sid = data.split("sessionId=", 1)[1].strip()
+                                if not ready.done():
+                                    ready.set_result(sid)
+                            elif line == "":
+                                event_name = None
+                except Exception as ex:  # noqa: BLE001
+                    if not ready.done():
+                        ready.set_exception(ex)
+
+            for _ in range(session_count):
+                url = f"{args.base.rstrip('/')}/mcp/{args.slug}/sse"
+                headers = {"Authorization": f"Bearer {args.token}", "Accept": "text/event-stream"}
+                ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+                task = asyncio.create_task(hold_sse(ready, url, headers))
+                sse_tasks.append(task)
+                sid = await asyncio.wait_for(ready, timeout=30.0)
+                session_ids.append(sid)
+                print(f"  sessionId={sid}", flush=True)
+        else:
+            print("streamable mode: no SSE sessions", flush=True)
+
+        stats = Stats()
+        lock = asyncio.Lock()
+        counter = {"n": 0}
+        stop_at = time.perf_counter() + args.duration
+        print(
+            f"start load: transport={transport} concurrency={args.concurrency} "
+            f"duration={args.duration}s tool={args.tool} slug={args.slug}",
+            flush=True,
+        )
+        t0 = time.perf_counter()
+        if transport == "sse":
+            workers = [
+                asyncio.create_task(
+                    worker_sse(
+                        i, client, args.base, args.slug, args.token, args.tool, arguments,
+                        session_ids, stop_at, stats, lock, counter,
+                    )
+                )
+                for i in range(args.concurrency)
+            ]
+        else:
+            workers = [
+                asyncio.create_task(
+                    worker_streamable(
+                        i, client, args.base, args.slug, args.token, args.tool, arguments,
+                        stop_at, stats, lock, counter,
+                    )
+                )
+                for i in range(args.concurrency)
+            ]
+        await asyncio.gather(*workers)
+        elapsed = time.perf_counter() - t0
+
+        stop.set()
+        for t in sse_tasks:
+            t.cancel()
+        if sse_tasks:
+            await asyncio.gather(*sse_tasks, return_exceptions=True)
+
+    print_result(elapsed, stats, transport)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="MCP gateway tools/call load test")
-    p.add_argument("--base", default="http://localhost:18190")
+    p.add_argument("--base", default="http://127.0.0.1:18190")
     p.add_argument("--slug", required=True)
     p.add_argument("--tool", required=True)
     p.add_argument("--token", required=True)
+    p.add_argument("--transport", choices=("sse", "streamable"), default="streamable")
     p.add_argument("--concurrency", type=int, default=20)
     p.add_argument("--duration", type=int, default=30, help="seconds")
     p.add_argument("--sessions", type=int, default=10, help="SSE sessions to keep")

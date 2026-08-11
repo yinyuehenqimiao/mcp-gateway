@@ -53,6 +53,8 @@ export interface McpServerItem {
   apiIds: number[]
   sseUrl: string
   messageEndpoint: string
+  /** 无状态 Streamable HTTP：POST /mcp/{slug} */
+  streamableUrl?: string
 }
 
 export interface ToolPreview {
@@ -77,6 +79,7 @@ export interface PublishedToolGroup {
   slug: string
   sseUrl: string
   messageEndpoint: string
+  streamableUrl?: string
   toolCount: number
   tools: PublishedTool[]
 }

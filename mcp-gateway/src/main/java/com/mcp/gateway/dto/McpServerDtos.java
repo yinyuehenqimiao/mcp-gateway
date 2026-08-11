@@ -45,7 +45,8 @@ public final class McpServerDtos {
             Boolean published,
             List<Long> apiIds,
             String sseUrl,
-            String messageEndpoint
+            String messageEndpoint,
+            String streamableUrl
     ) {
     }
 

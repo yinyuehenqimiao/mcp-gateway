@@ -68,6 +68,18 @@ gateway:
     enabled: true
     per-key-per-minute: 60
     per-tool-per-minute: 30
+  audit:
+    mq:
+      enabled: true
+      topic: mcp-audit_topic
+      consumer-group: mcp-audit_cg
+      send-timeout-ms: 2000
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:127.0.0.1:9876}
+  producer:
+    group: ${ROCKETMQ_MCP_AUDIT_PRODUCER_GROUP:mcp_audit_producer_group}
+    send-message-timeout: 2000
 
 logging:
   level:

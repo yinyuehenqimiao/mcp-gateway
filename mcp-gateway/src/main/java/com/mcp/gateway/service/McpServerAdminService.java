@@ -201,6 +201,7 @@ public class McpServerAdminService {
         String base = trimSlash(gatewayProperties.getPublicBaseUrl());
         String sseUrl = base + "/mcp/" + server.getSlug() + "/sse";
         String messageEndpoint = base + "/mcp/" + server.getSlug() + "/message";
+        String streamableUrl = base + "/mcp/" + server.getSlug();
         return new McpServerDtos.McpServerResponse(
                 server.getId(),
                 server.getName(),
@@ -212,7 +213,8 @@ public class McpServerAdminService {
                 server.getPublished(),
                 apiIds,
                 sseUrl,
-                messageEndpoint
+                messageEndpoint,
+                streamableUrl
         );
     }
 

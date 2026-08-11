@@ -1,60 +1,43 @@
 package com.mcp.gateway.service;
 
+import com.mcp.gateway.config.GatewayProperties;
 import com.mcp.gateway.domain.entity.ToolCallAudit;
 import com.mcp.gateway.domain.repository.ToolCallAuditRepository;
 import com.mcp.gateway.dto.AuditDtos;
-import jakarta.annotation.PreDestroy;
+import com.mcp.gateway.service.audit.ToolCallAuditProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class ToolCallAuditService {
 
     private static final Logger log = LoggerFactory.getLogger(ToolCallAuditService.class);
-    private static final int QUEUE_CAPACITY = 10_000;
 
     private final ToolCallAuditRepository repository;
-    private final TransactionTemplate transactionTemplate;
-    private final LinkedBlockingQueue<AuditEvent> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
-    private final ExecutorService worker;
-    private final AtomicBoolean running = new AtomicBoolean(true);
-    private final AtomicLong dropped = new AtomicLong();
+    private final GatewayProperties gatewayProperties;
+    private final ObjectProvider<ToolCallAuditProducer> auditProducer;
 
-    public ToolCallAuditService(ToolCallAuditRepository repository, PlatformTransactionManager txManager) {
+    public ToolCallAuditService(
+            ToolCallAuditRepository repository,
+            GatewayProperties gatewayProperties,
+            ObjectProvider<ToolCallAuditProducer> auditProducer) {
         this.repository = repository;
-        this.transactionTemplate = new TransactionTemplate(txManager);
-        ThreadFactory tf = r -> {
-            Thread t = new Thread(r, "tool-audit-writer");
-            t.setDaemon(true);
-            return t;
-        };
-        this.worker = new ThreadPoolExecutor(
-                1, 1,
-                0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(1),
-                tf,
-                new ThreadPoolExecutor.DiscardPolicy());
-        this.worker.execute(this::drainLoop);
+        this.gatewayProperties = gatewayProperties;
+        this.auditProducer = auditProducer;
     }
 
     /**
-     * 热路径非阻塞入队；队列满时丢弃并计数，避免拖垮 tools/call。
+     * 热路径异步审计：优先发 RocketMQ；未启用或发送组件缺失时降级为同步写库失败也不抛给调用方。
      */
     public void recordAsync(
             String slug,
@@ -65,20 +48,38 @@ public class ToolCallAuditService {
             boolean success,
             String errorMessage,
             int durationMs) {
-        AuditEvent event = new AuditEvent(
-                slug,
-                callerKeyHash,
-                callerSubject,
-                toolName,
-                truncate(argumentsSummary, 1000),
-                success,
-                truncate(errorMessage, 1000),
-                Math.max(durationMs, 0));
-        if (!queue.offer(event)) {
-            long n = dropped.incrementAndGet();
-            if (n == 1L || n % 1000 == 0) {
-                log.warn("审计队列已满，已丢弃 {} 条记录", n);
+        Map<String, String> payload = new HashMap<>();
+        payload.put("keys", UUID.randomUUID().toString());
+        payload.put("slug", nullToEmpty(slug));
+        payload.put("callerKeyHash", nullToEmpty(callerKeyHash));
+        payload.put("callerSubject", nullToEmpty(callerSubject));
+        payload.put("toolName", nullToEmpty(toolName));
+        payload.put("argumentsSummary", truncate(argumentsSummary, 1000));
+        payload.put("success", String.valueOf(success));
+        payload.put("errorMessage", truncate(errorMessage, 1000));
+        payload.put("durationMs", String.valueOf(Math.max(durationMs, 0)));
+
+        if (gatewayProperties.getAudit().getMq().isEnabled()) {
+            ToolCallAuditProducer producer = auditProducer.getIfAvailable();
+            if (producer != null) {
+                producer.send(payload);
+                return;
             }
+            log.warn("audit mq enabled but producer missing, drop async audit tool={}", toolName);
+            return;
+        }
+        try {
+            record(
+                    slug,
+                    callerKeyHash,
+                    callerSubject,
+                    toolName,
+                    argumentsSummary,
+                    success,
+                    errorMessage,
+                    durationMs);
+        } catch (Exception ex) {
+            log.warn("fallback sync audit failed tool={}: {}", toolName, ex.getMessage());
         }
     }
 
@@ -92,15 +93,16 @@ public class ToolCallAuditService {
             boolean success,
             String errorMessage,
             int durationMs) {
-        persist(new AuditEvent(
-                slug,
-                callerKeyHash,
-                callerSubject,
-                toolName,
-                truncate(argumentsSummary, 1000),
-                success,
-                truncate(errorMessage, 1000),
-                Math.max(durationMs, 0)));
+        ToolCallAudit audit = new ToolCallAudit();
+        audit.setSlug(slug);
+        audit.setCallerKeyHash(callerKeyHash);
+        audit.setCallerSubject(callerSubject);
+        audit.setToolName(toolName);
+        audit.setArgumentsSummary(truncate(argumentsSummary, 1000));
+        audit.setSuccess(success);
+        audit.setErrorMessage(truncate(errorMessage, 1000));
+        audit.setDurationMs(Math.max(durationMs, 0));
+        repository.save(audit);
     }
 
     @Transactional(readOnly = true)
@@ -120,35 +122,6 @@ public class ToolCallAuditService {
                 result.getTotalPages());
     }
 
-    private void drainLoop() {
-        while (running.get() || !queue.isEmpty()) {
-            try {
-                AuditEvent event = queue.poll(500, TimeUnit.MILLISECONDS);
-                if (event != null) {
-                    transactionTemplate.executeWithoutResult(status -> persist(event));
-                }
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Exception ex) {
-                log.warn("异步写入审计失败: {}", ex.getMessage());
-            }
-        }
-    }
-
-    private void persist(AuditEvent event) {
-        ToolCallAudit audit = new ToolCallAudit();
-        audit.setSlug(event.slug());
-        audit.setCallerKeyHash(event.callerKeyHash());
-        audit.setCallerSubject(event.callerSubject());
-        audit.setToolName(event.toolName());
-        audit.setArgumentsSummary(event.argumentsSummary());
-        audit.setSuccess(event.success());
-        audit.setErrorMessage(event.errorMessage());
-        audit.setDurationMs(event.durationMs());
-        repository.save(audit);
-    }
-
     private AuditDtos.AuditItem toItem(ToolCallAudit audit) {
         return new AuditDtos.AuditItem(
                 audit.getId(),
@@ -165,33 +138,12 @@ public class ToolCallAuditService {
 
     private static String truncate(String value, int max) {
         if (value == null) {
-            return null;
+            return "";
         }
         return value.length() <= max ? value : value.substring(0, max);
     }
 
-    @PreDestroy
-    public void shutdown() {
-        running.set(false);
-        worker.shutdown();
-        try {
-            if (!worker.awaitTermination(3, TimeUnit.SECONDS)) {
-                worker.shutdownNow();
-            }
-        } catch (InterruptedException | RejectedExecutionException ex) {
-            worker.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private record AuditEvent(
-            String slug,
-            String callerKeyHash,
-            String callerSubject,
-            String toolName,
-            String argumentsSummary,
-            boolean success,
-            String errorMessage,
-            int durationMs) {
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

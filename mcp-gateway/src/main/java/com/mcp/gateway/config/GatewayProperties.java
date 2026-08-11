@@ -11,6 +11,7 @@ public class GatewayProperties {
     private long httpTimeoutMs = 15000L;
     private final Jwt jwt = new Jwt();
     private final RateLimit rateLimit = new RateLimit();
+    private final Audit audit = new Audit();
 
     public String getDefaultServerSlug() {
         return defaultServerSlug;
@@ -42,6 +43,10 @@ public class GatewayProperties {
 
     public RateLimit getRateLimit() {
         return rateLimit;
+    }
+
+    public Audit getAudit() {
+        return audit;
     }
 
     public static class Jwt {
@@ -95,6 +100,53 @@ public class GatewayProperties {
 
         public void setPerToolPerMinute(int perToolPerMinute) {
             this.perToolPerMinute = perToolPerMinute;
+        }
+    }
+
+    public static class Audit {
+        private final Mq mq = new Mq();
+
+        public Mq getMq() {
+            return mq;
+        }
+
+        public static class Mq {
+            private boolean enabled = true;
+            private String topic = "mcp-audit_topic";
+            private String consumerGroup = "mcp-audit_cg";
+            private long sendTimeoutMs = 2000L;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public String getTopic() {
+                return topic;
+            }
+
+            public void setTopic(String topic) {
+                this.topic = topic;
+            }
+
+            public String getConsumerGroup() {
+                return consumerGroup;
+            }
+
+            public void setConsumerGroup(String consumerGroup) {
+                this.consumerGroup = consumerGroup;
+            }
+
+            public long getSendTimeoutMs() {
+                return sendTimeoutMs;
+            }
+
+            public void setSendTimeoutMs(long sendTimeoutMs) {
+                this.sendTimeoutMs = sendTimeoutMs;
+            }
         }
     }
 }

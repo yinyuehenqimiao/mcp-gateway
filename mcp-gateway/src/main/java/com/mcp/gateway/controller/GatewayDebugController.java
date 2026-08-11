@@ -58,6 +58,7 @@ public class GatewayDebugController {
             group.put("slug", serverSlug);
             group.put("sseUrl", base + "/mcp/" + serverSlug + "/sse");
             group.put("messageEndpoint", base + "/mcp/" + serverSlug + "/message");
+            group.put("streamableUrl", base + "/mcp/" + serverSlug);
             group.put("toolCount", mappings.size());
             group.put("tools", mappings.stream().map(m -> toView(serverSlug, m)).toList());
             groups.add(group);

@@ -7,11 +7,14 @@ cd D:\Project\AI\MCP\mcp-gateway
 mvn -q spring-boot:run "-Dspring-boot.run.profiles=bench"
 ```
 
-## 2. 启动本地 echo 下游
+## 2. 启动本地稳定假下游（aiohttp）
 
 ```powershell
+D:\Anaconda\envs\agent-study\python.exe -m pip install -q -r D:\Project\AI\MCP\mcp-gateway\bench\requirements-bench.txt
 D:\Anaconda\envs\agent-study\python.exe D:\Project\AI\MCP\mcp-gateway\bench\echo_server.py --port 18081 --delay-ms 5
 ```
+
+健康检查：`GET http://127.0.0.1:18081/health`。默认 `/ping` 固定延迟 `delay-ms`（压测隔离下游）。
 
 ## 3. 安装依赖并跑压测
 
@@ -24,13 +27,15 @@ D:\Anaconda\envs\agent-study\python.exe D:\Project\AI\MCP\mcp-gateway\bench\mcp_
 
 脚本已设置 `trust_env=False`，避免本机 HTTP 代理干扰 localhost。
 
-## 优化后对照（echo 5ms，bench profile，45s）
+## 优化后对照（稳定 aiohttp echo 5ms，bench profile，45s，Streamable）
 
-| 并发 | 优化前 QPS / 错误率 / p95 | 优化后 QPS / 错误率 / p95 |
-|------|---------------------------|---------------------------|
-| 10 | 380 / 0.02% / 34ms | **746** / 0.01% / **18ms** |
-| 50 | 198 / 0.40% / 894ms | **336** / 0.26% / **509ms** |
-| 100 | 260 / **5.89%** / 1399ms | **282** / **0.65%** / 1102ms |
-| 200 | 高错误不可用 | 仍高（Python echo 易被打挂） |
+| 并发 | QPS | 错误率 | p50 | p95 |
+|------|-----|--------|-----|-----|
+| 10 | **538** | **0.00%** | 16ms | **33ms** |
+| 50 | 301 | **0.00%** | 96ms | 546ms |
+| 100 | 255 | **0.00%** | 238ms | 1210ms |
+| 200 | 193 | **0.00%** | 619ms | 3439ms |
 
-并发 100 错误率已从 5.89% 降到 **0.65%（小于 1%）**。p95 仍受下游 echo 与 SSE 扇出限制；传输层下一步见 `STREAMABLE_HTTP_EVAL.md`。
+同条件 SSE 并发 100：QPS **216** / 错误率 **0.00%** / p95 1401ms（低于 Streamable 的 255 QPS）。
+
+此前 Python `ThreadingHTTPServer` 在高并发下易 `Connection refused`；现改为 aiohttp 假下游后错误率清零，剩余延迟主要来自网关侧排队与 MQ 审计热路径开销。

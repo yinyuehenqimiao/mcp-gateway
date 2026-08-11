@@ -38,7 +38,8 @@
       <el-table-column label="绑定 API" width="100">
         <template #default="{ row }">{{ row.apiIds?.length || 0 }}</template>
       </el-table-column>
-      <el-table-column prop="sseUrl" label="SSE" min-width="240" show-overflow-tooltip />
+      <el-table-column prop="sseUrl" label="SSE" min-width="220" show-overflow-tooltip />
+      <el-table-column prop="streamableUrl" label="Streamable" min-width="200" show-overflow-tooltip />
       <el-table-column label="操作" width="340" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="copySse(row)">复制SSE</el-button>

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>已发布工具</h2>
-        <p>按 MCP Server（slug）分组。每个分组有独立 SSE 地址，Agent 只看到该组工具。</p>
+        <p>按 MCP Server（slug）分组。每个分组有独立 SSE / Streamable 地址，Agent 只看到该组工具。</p>
       </div>
       <div class="actions">
         <el-button @click="reload">热重载</el-button>
@@ -17,11 +17,13 @@
       <div class="group-head">
         <div>
           <div class="group-title">{{ group.slug }}</div>
-          <div class="mono group-url">{{ group.sseUrl }}</div>
+          <div class="mono group-url">SSE: {{ group.sseUrl }}</div>
+          <div v-if="group.streamableUrl" class="mono group-url">Streamable: {{ group.streamableUrl }}</div>
         </div>
         <div class="group-actions">
           <el-tag type="success">{{ group.toolCount }} 个工具</el-tag>
           <el-button size="small" @click="copy(group.sseUrl)">复制 SSE</el-button>
+          <el-button v-if="group.streamableUrl" size="small" @click="copy(group.streamableUrl)">复制 Streamable</el-button>
         </div>
       </div>
 
