@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.DeferredResult;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -42,6 +43,7 @@ public class McpSseController {
 
     private static final Logger log = LoggerFactory.getLogger(McpSseController.class);
     private static final String PROTOCOL_VERSION = "2024-11-05";
+    private static final long DEFERRED_TIMEOUT_MS = 30_000L;
 
     private final DynamicToolRegistry toolRegistry;
     private final HttpToolForwarder httpToolForwarder;
@@ -72,8 +74,6 @@ public class McpSseController {
     public Object connect(
             @PathVariable String slug,
             @RequestHeader(value = "Authorization", required = false) String authorization) {
-        // 鉴权失败时必须直接返回 JSON，不能走 SseEmitter 内容协商；
-        // 否则 Client Accept: text/event-stream 时会变成空 500，掩盖真正的 401。
         final McpServerEntity server;
         final McpApiKeyAuthenticator.AuthContext auth;
         try {
@@ -92,11 +92,12 @@ public class McpSseController {
 
         String sessionId = UUID.randomUUID().toString();
         SseEmitter emitter = new SseEmitter(0L);
-        sessionManager.create(sessionId, slug, auth.rawToken(), emitter);
+        McpSession session = sessionManager.create(sessionId, slug, auth.rawToken(), emitter);
 
         try {
             String endpoint = "/mcp/" + slug + "/message?sessionId=" + sessionId;
-            emitter.send(SseEmitter.event().name("endpoint").data(endpoint));
+            // endpoint 事件 data 必须是纯路径字符串（非 JSON），供 MCP 客户端解析 sessionId
+            session.emitter().send(SseEmitter.event().name("endpoint").data(endpoint));
             log.info("MCP SSE connected slug={} sessionId={} subject={}", slug, sessionId, auth.subject());
         } catch (IOException ex) {
             sessionManager.remove(sessionId);
@@ -108,7 +109,7 @@ public class McpSseController {
     }
 
     @PostMapping("/message")
-    public ResponseEntity<?> message(
+    public Object message(
             @PathVariable String slug,
             @RequestParam String sessionId,
             @RequestHeader(value = "Authorization", required = false) String authorization,
@@ -124,14 +125,20 @@ public class McpSseController {
         JsonNode message = objectMapper.readTree(body);
         if (message.isArray()) {
             for (JsonNode item : message) {
-                handleOne(session, server, authorization, item);
+                Object handled = handleOne(session, server, authorization, item);
+                if (handled instanceof DeferredResult<?>) {
+                    // 批量场景少见；同步等待不合适，改为逐条同步执行 tools/call
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "code", "BAD_REQUEST",
+                            "message", "批量 JSON-RPC 暂不支持含 tools/call 的异步批处理，请逐条发送"));
+                }
             }
             return ResponseEntity.accepted().build();
         }
         return handleOne(session, server, authorization, message);
     }
 
-    private ResponseEntity<?> handleOne(
+    private Object handleOne(
             McpSession session,
             McpServerEntity server,
             String authorization,
@@ -149,6 +156,10 @@ public class McpSseController {
             return ResponseEntity.accepted().build();
         }
 
+        if ("tools/call".equals(method)) {
+            return handleToolsCallAsync(session, server, authorization, message, id);
+        }
+
         ObjectNode response = objectMapper.createObjectNode();
         response.put("jsonrpc", "2.0");
         response.set("id", id);
@@ -161,10 +172,6 @@ public class McpSseController {
                     McpApiKeyAuthenticator.AuthContext auth = resolveToolAuth(server, session, authorization);
                     rateLimiter.checkOrThrow(auth.keyHash(), session.slug(), null);
                     response.set("result", toolsListResult(session.slug()));
-                }
-                case "tools/call" -> {
-                    McpApiKeyAuthenticator.AuthContext auth = resolveToolAuth(server, session, authorization);
-                    response.set("result", toolsCallResult(session, auth, message.path("params")));
                 }
                 default -> {
                     return ResponseEntity.ok(error(id, -32601, "Method not found: " + method));
@@ -187,6 +194,93 @@ public class McpSseController {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(response);
+    }
+
+    private DeferredResult<ResponseEntity<?>> handleToolsCallAsync(
+            McpSession session,
+            McpServerEntity server,
+            String authorization,
+            JsonNode message,
+            JsonNode id) {
+        DeferredResult<ResponseEntity<?>> deferred = new DeferredResult<>(DEFERRED_TIMEOUT_MS);
+        deferred.onTimeout(() -> deferred.setResult(
+                ResponseEntity.ok(error(id, -32000, "tools/call timeout"))));
+
+        final McpApiKeyAuthenticator.AuthContext auth;
+        final String toolName;
+        final ToolMapping mapping;
+        final String argsJson;
+        try {
+            auth = resolveToolAuth(server, session, authorization);
+            JsonNode params = message.path("params");
+            toolName = text(params, "name");
+            if (toolName == null || toolName.isBlank()) {
+                throw new BusinessException("tools/call 缺少 name");
+            }
+            rateLimiter.checkOrThrow(auth.keyHash(), session.slug(), toolName);
+            mapping = toolRegistry.findMapping(session.slug(), toolName)
+                    .orElseThrow(() -> new BusinessException("工具不存在或不属于该 MCP: " + toolName));
+            JsonNode arguments = params.path("arguments");
+            argsJson = arguments.isMissingNode() || arguments.isNull()
+                    ? "{}"
+                    : objectMapper.writeValueAsString(arguments);
+        } catch (BusinessException ex) {
+            if ("UNAUTHORIZED".equals(ex.getCode())) {
+                deferred.setResult(ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(error(id, -32001, ex.getMessage())));
+            } else if ("RATE_LIMITED".equals(ex.getCode())) {
+                deferred.setResult(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                        .body(error(id, -32029, ex.getMessage())));
+            } else {
+                deferred.setResult(ResponseEntity.ok(error(id, -32603, ex.getMessage())));
+            }
+            return deferred;
+        } catch (Exception ex) {
+            deferred.setResult(ResponseEntity.ok(error(id, -32603, ex.getMessage())));
+            return deferred;
+        }
+
+        long start = System.currentTimeMillis();
+        httpToolForwarder.forwardAsync(mapping, argsJson, auth.rawToken())
+                .subscribe(
+                        output -> {
+                            boolean success = output == null || !output.contains("\"error\"");
+                            String errorMessage = success ? null : truncate(output, 500);
+                            int duration = (int) (System.currentTimeMillis() - start);
+                            auditService.recordAsync(
+                                    session.slug(),
+                                    auth.keyHash(),
+                                    auth.subject(),
+                                    toolName,
+                                    argsJson,
+                                    success,
+                                    errorMessage,
+                                    duration);
+
+                            ObjectNode response = objectMapper.createObjectNode();
+                            response.put("jsonrpc", "2.0");
+                            response.set("id", id);
+                            ObjectNode result = response.putObject("result");
+                            ArrayNode content = result.putArray("content");
+                            ObjectNode text = content.addObject();
+                            text.put("type", "text");
+                            text.put("text", output == null ? "" : output);
+                            result.put("isError", !success);
+
+                            try {
+                                sendSseMessage(session, response);
+                            } catch (Exception ex) {
+                                log.warn("SSE 推送失败 session={}: {}", session.sessionId(), ex.getMessage());
+                            }
+                            deferred.setResult(ResponseEntity.ok()
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .body(response));
+                        },
+                        error -> {
+                            log.error("tools/call 异步失败 tool={}", toolName, error);
+                            deferred.setResult(ResponseEntity.ok(error(id, -32603, error.getMessage())));
+                        });
+        return deferred;
     }
 
     private McpApiKeyAuthenticator.AuthContext resolveToolAuth(
@@ -223,71 +317,8 @@ public class McpSseController {
         return result;
     }
 
-    private ObjectNode toolsCallResult(
-            McpSession session,
-            McpApiKeyAuthenticator.AuthContext auth,
-            JsonNode params) {
-        String toolName = text(params, "name");
-        if (toolName == null || toolName.isBlank()) {
-            throw new BusinessException("tools/call 缺少 name");
-        }
-        rateLimiter.checkOrThrow(auth.keyHash(), session.slug(), toolName);
-
-        ToolMapping mapping = toolRegistry.findMapping(session.slug(), toolName)
-                .orElseThrow(() -> new BusinessException("工具不存在或不属于该 MCP: " + toolName));
-
-        JsonNode arguments = params.path("arguments");
-        String argsJson;
-        try {
-            argsJson = arguments.isMissingNode() || arguments.isNull()
-                    ? "{}"
-                    : objectMapper.writeValueAsString(arguments);
-        } catch (Exception ex) {
-            throw new BusinessException("arguments 解析失败: " + ex.getMessage());
-        }
-
-        long start = System.currentTimeMillis();
-        boolean success = false;
-        String errorMessage = null;
-        String output;
-        try {
-            output = httpToolForwarder.forward(mapping, argsJson, auth.rawToken());
-            success = output == null || !output.contains("\"error\"");
-            if (!success) {
-                errorMessage = truncate(output, 500);
-            }
-        } catch (Exception ex) {
-            output = "{\"error\":\"" + ex.getMessage() + "\"}";
-            errorMessage = ex.getMessage();
-        }
-        int duration = (int) (System.currentTimeMillis() - start);
-        try {
-            auditService.record(
-                    session.slug(),
-                    auth.keyHash(),
-                    auth.subject(),
-                    toolName,
-                    argsJson,
-                    success,
-                    errorMessage,
-                    duration);
-        } catch (Exception ex) {
-            log.warn("写入调用审计失败 tool={}: {}", toolName, ex.getMessage());
-        }
-
-        ObjectNode result = objectMapper.createObjectNode();
-        ArrayNode content = result.putArray("content");
-        ObjectNode text = content.addObject();
-        text.put("type", "text");
-        text.put("text", output == null ? "" : output);
-        result.put("isError", !success);
-        return result;
-    }
-
     private void sendSseMessage(McpSession session, ObjectNode response) throws IOException {
-        session.emitter().send(SseEmitter.event()
-                .name("message")
-                .data(objectMapper.writeValueAsString(response), MediaType.APPLICATION_JSON));
+        session.sendJsonEvent("message", objectMapper.writeValueAsString(response));
     }
 
     private McpServerEntity requirePublished(String slug) {

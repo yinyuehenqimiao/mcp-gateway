@@ -1,9 +1,19 @@
 server:
   port: 18190
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 20
+    max-connections: 10000
+    accept-count: 500
+    connection-timeout: 20s
 
 spring:
   application:
     name: mcp-gateway
+  main:
+    # 引入 webflux 仅作 WebClient；保持 Servlet 栈
+    web-application-type: servlet
   datasource:
     # characterEncoding 必须是 Java 字符集名 UTF-8（不能写 utf8mb4，否则连不上库并触发 Dialect 报错）
     url: jdbc:mysql://127.0.0.1:3307/mcp_gateway?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
@@ -12,7 +22,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 10000
-      maximum-pool-size: 10
+      maximum-pool-size: 30
       initialization-fail-timeout: 1
   data:
     redis:
@@ -40,6 +50,9 @@ spring:
         protocol: sse
         sse-endpoint: /sse
         sse-message-endpoint: /mcp/message
+  mvc:
+    async:
+      request-timeout: 35000
 
 gateway:
   # 兼容旧入口 /sse 时加载的默认 MCP slug；多 Agent 请使用 /mcp/{slug}/sse
@@ -59,3 +72,4 @@ gateway:
 logging:
   level:
     com.mcp.gateway: INFO
+    com.mcp.gateway.service.tool.HttpToolForwarder: WARN

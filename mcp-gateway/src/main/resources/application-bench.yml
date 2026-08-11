@@ -1,0 +1,17 @@
+# 压测专用：关闭限流，避免测到限流器而不是吞吐
+server:
+  tomcat:
+    threads:
+      max: 400
+    max-connections: 10000
+    accept-count: 1000
+
+gateway:
+  rate-limit:
+    enabled: false
+  http-timeout-ms: 15000
+
+logging:
+  level:
+    com.mcp.gateway: WARN
+    org.springframework.web: WARN

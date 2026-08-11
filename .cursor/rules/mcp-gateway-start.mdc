@@ -1,0 +1,35 @@
+---
+description: mcp-gateway 前后端固定启动命令；用户说启动时直接执行，少探测
+alwaysApply: true
+---
+
+# mcp-gateway 启动
+
+用户说「启动 mcp-gateway / 前端 / 后端」时：**不要反复探测**，先确保依赖容器，再后台拉起进程。
+
+## 依赖（先起）
+
+```powershell
+docker start mcp-gateway-mysql shortlink-redis
+```
+
+## 后端（端口 18190）
+
+```powershell
+# 工作目录：D:\Project\AI\MCP\mcp-gateway
+mvn -q spring-boot:run
+```
+
+## 前端（端口 5273）
+
+```powershell
+# 工作目录：D:\Project\AI\MCP\mcp-gateway-web
+npm run dev
+```
+
+## 就绪判断
+
+- 后端：日志出现 `Tomcat started on port 18190` 或 `Started McpGatewayApplication`
+- 前端：日志出现 `Local:` / `http://localhost:5273`
+
+若端口已被占用，视为已启动，告知地址即可，勿重复起多份。
