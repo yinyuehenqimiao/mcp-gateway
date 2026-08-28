@@ -1,17 +1,19 @@
 server:
-  port: 8081
+  port: ${SERVER_PORT:8081}
 
 spring:
   application:
     name: demo-biz
+  config:
+    import: optional:file:.env[.properties]
 
 demo:
   jwt:
-    # 与 mcp-gateway gateway.jwt.secret 保持一致，便于把同一 JWT 当 MCP API Key
-    secret: demo-biz-jwt-secret-change-me-32bytes!!
-    expire-seconds: 7200
-    demo-username: demo
-    demo-password: demo123
+    # 与 mcp-gateway GATEWAY_JWT_SECRET 保持一致，便于把同一 JWT 当 MCP API Key
+    secret: ${DEMO_JWT_SECRET}
+    expire-seconds: ${DEMO_JWT_EXPIRE_SECONDS:7200}
+    demo-username: ${DEMO_USERNAME}
+    demo-password: ${DEMO_PASSWORD}
 
 springdoc:
   api-docs:

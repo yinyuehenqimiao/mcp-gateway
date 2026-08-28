@@ -1,5 +1,5 @@
 server:
-  port: 18190
+  port: ${SERVER_PORT:18190}
   tomcat:
     threads:
       max: 400
@@ -11,14 +11,17 @@ server:
 spring:
   application:
     name: mcp-gateway
+  config:
+    # 本地可复制 .env.example 为 .env（勿提交）；启动时自动加载
+    import: optional:file:.env[.properties]
   main:
     # 引入 webflux 仅作 WebClient；保持 Servlet 栈
     web-application-type: servlet
   datasource:
     # characterEncoding 必须是 Java 字符集名 UTF-8（不能写 utf8mb4，否则连不上库并触发 Dialect 报错）
-    url: jdbc:mysql://127.0.0.1:3307/mcp_gateway?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
-    username: mcp
-    password: mcp_pass_123
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3307/mcp_gateway?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${MYSQL_USERNAME}
+    password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-timeout: 10000
@@ -26,9 +29,8 @@ spring:
       initialization-fail-timeout: 1
   data:
     redis:
-      # 复用已有 shortlink-redis（宿主机 6379）
-      host: 127.0.0.1
-      port: 6379
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
       timeout: 2s
   jpa:
     database-platform: org.hibernate.dialect.MySQLDialect
@@ -56,24 +58,24 @@ spring:
 
 gateway:
   # 兼容旧入口 /sse 时加载的默认 MCP slug；多 Agent 请使用 /mcp/{slug}/sse
-  default-server-slug: default
-  public-base-url: http://localhost:18190
+  default-server-slug: ${GATEWAY_DEFAULT_SERVER_SLUG:default}
+  public-base-url: ${GATEWAY_PUBLIC_BASE_URL:http://localhost:18190}
   # tools/call 超时（毫秒）
-  http-timeout-ms: 15000
+  http-timeout-ms: ${GATEWAY_HTTP_TIMEOUT_MS:15000}
   jwt:
-    # 与 demo-biz demo.jwt.secret 一致：MCP 可用下游 JWT 当 API Key
-    enabled: true
-    secret: demo-biz-jwt-secret-change-me-32bytes!!
+    # 与 demo-biz DEMO_JWT_SECRET 保持一致：MCP 可用下游 JWT 当 API Key
+    enabled: ${GATEWAY_JWT_ENABLED:true}
+    secret: ${GATEWAY_JWT_SECRET}
   rate-limit:
-    enabled: true
-    per-key-per-minute: 60
-    per-tool-per-minute: 30
+    enabled: ${GATEWAY_RATE_LIMIT_ENABLED:true}
+    per-key-per-minute: ${GATEWAY_RATE_LIMIT_PER_KEY:60}
+    per-tool-per-minute: ${GATEWAY_RATE_LIMIT_PER_TOOL:30}
   audit:
     mq:
-      enabled: true
-      topic: mcp-audit_topic
-      consumer-group: mcp-audit_cg
-      send-timeout-ms: 2000
+      enabled: ${GATEWAY_AUDIT_MQ_ENABLED:true}
+      topic: ${GATEWAY_AUDIT_MQ_TOPIC:mcp-audit_topic}
+      consumer-group: ${GATEWAY_AUDIT_MQ_CONSUMER_GROUP:mcp-audit_cg}
+      send-timeout-ms: ${GATEWAY_AUDIT_MQ_SEND_TIMEOUT_MS:2000}
 
 rocketmq:
   name-server: ${ROCKETMQ_NAME_SERVER:127.0.0.1:9876}

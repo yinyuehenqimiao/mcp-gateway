@@ -3,6 +3,7 @@
 **/node_modules/
 **/dist/
 **/dist-ssr/
+**/META-INF/
 
 # IDE / OS
 **/.idea/
@@ -16,10 +17,20 @@ Thumbs.db
 *.log
 **/hs_err_pid*.log
 
-# Local env
+# Local env（只提交 *.env.example）
 **/.env
-**/.env.*
+**/.env.local
+**/.env.*.local
 !**/.env.example
 
+# Bench local dumps
+**/bench/*-results*.txt
+**/bench/last-results.txt
+**/bench/streamable-vs-sse.txt
+**/bench/tmp_*.json
+
 **/init.sql.tmp
+
+# Cursor local
+.cursor/
 

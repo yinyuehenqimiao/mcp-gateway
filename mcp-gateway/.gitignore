@@ -7,3 +7,9 @@ target/
 .vscode/
 *.log
 .DS_Store
+.env
+.env.local
+!.env.example
+META-INF/
+bench/*-results*.txt
+bench/last-results.txt
